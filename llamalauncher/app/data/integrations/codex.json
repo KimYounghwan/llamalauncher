@@ -1,0 +1,52 @@
+{
+  "id": "codex",
+  "order": 7,
+  "name": "OpenAI Codex CLI",
+  "icon": "⌨️",
+  "category": "agent",
+  "description": "OpenAI의 터미널 코딩 에이전트.",
+  "docs_url": "https://learn.chatgpt.com/docs/config-file/config-reference",
+  "checked": "2026-11-21",
+  "api": "responses",
+  "needs_tools": true,
+  "min_context": 32768,
+  "recommended_context": 65536,
+  "detect": {
+    "commands": [
+      "codex"
+    ],
+    "paths": [
+      "~/.codex"
+    ]
+  },
+  "files": [
+    {
+      "path": "~/.codex/config.toml",
+      "format": "toml",
+      "template": {
+        "model": "{MODEL}",
+        "model_provider": "llamalauncher",
+        "model_providers": {
+          "llamalauncher": {
+            "name": "LlamaLauncher",
+            "base_url": "{API_BASE}",
+            "wire_api": "responses",
+            "env_key": {
+              "$if": "api_key",
+              "$value": "LLAMALAUNCHER_API_KEY"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "env": {
+    "$if": "api_key",
+    "LLAMALAUNCHER_API_KEY": "{API_KEY}"
+  },
+  "notes": [
+    "Codex는 Responses API(/v1/responses)만 지원해요. [연결 테스트]로 서버가 지원하는지 확인하세요.",
+    "적용하면 Codex의 기본 모델이 바뀌어요. 원래대로 쓰려면 [원래대로 되돌리기]를 누르세요."
+  ],
+  "verified": "codex-cli 0.163.0에서 실제 동작 확인 (wire_api = responses)"
+}

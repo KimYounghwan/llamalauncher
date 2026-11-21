@@ -1,0 +1,64 @@
+{
+  "id": "continue",
+  "order": 3,
+  "name": "Continue",
+  "icon": "▶️",
+  "category": "edit",
+  "description": "VS Code·JetBrains용 AI 채팅·편집 확장.",
+  "docs_url": "https://docs.continue.dev/reference",
+  "checked": "2026-11-21",
+  "api": "chat",
+  "needs_tools": false,
+  "min_context": 8192,
+  "recommended_context": 32768,
+  "detect": {
+    "vscode_extensions": [
+      "continue.continue"
+    ],
+    "paths": [
+      "~/.continue"
+    ]
+  },
+  "files": [
+    {
+      "path": "~/.continue/config.yaml",
+      "format": "yaml",
+      "template": {
+        "name": "LlamaLauncher",
+        "version": "1.0.0",
+        "schema": "v1",
+        "models": [
+          {
+            "name": "라마런처 채팅",
+            "provider": "openai",
+            "model": "{MODEL}",
+            "apiBase": "{API_BASE}",
+            "roles": [
+              "chat",
+              "edit",
+              "apply"
+            ],
+            "defaultCompletionOptions": {
+              "contextLength": "{CONTEXT}"
+            },
+            "requestOptions": {
+              "$if": "api_key",
+              "headers": {
+                "Authorization": "Bearer {API_KEY}"
+              }
+            },
+            "capabilities": {
+              "$if": "tools",
+              "$list": [
+                "tool_use"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "notes": [
+    "자동완성(탭 완성)은 작은 FIM 지원 모델(예: Qwen2.5-Coder 1.5B Base)을 따로 띄우는 것이 좋아요. 같은 모델로 하면 느려요."
+  ]
+}

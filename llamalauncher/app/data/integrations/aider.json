@@ -1,0 +1,48 @@
+{
+  "id": "aider",
+  "order": 6,
+  "name": "Aider",
+  "icon": "🛠",
+  "category": "edit",
+  "description": "터미널에서 git 저장소의 코드를 고쳐 주는 AI 짝 프로그래머.",
+  "docs_url": "https://aider.chat/docs/llms/openai-compat.html",
+  "checked": "2026-11-21",
+  "api": "chat",
+  "needs_tools": false,
+  "min_context": 8192,
+  "recommended_context": 32768,
+  "detect": {
+    "commands": [
+      "aider"
+    ]
+  },
+  "files": [
+    {
+      "path": "~/.aider.conf.yml",
+      "format": "yaml",
+      "template": {
+        "openai-api-base": "{API_BASE}",
+        "openai-api-key": "{API_KEY_OR_DUMMY}",
+        "model": "openai/{MODEL}"
+      }
+    },
+    {
+      "path": "~/.aider.model.metadata.json",
+      "format": "json",
+      "template": {
+        "openai/{MODEL}": {
+          "max_tokens": "{OUTPUT}",
+          "max_input_tokens": "{CONTEXT}",
+          "max_output_tokens": "{OUTPUT}",
+          "input_cost_per_token": 0,
+          "output_cost_per_token": 0,
+          "litellm_provider": "openai",
+          "mode": "chat"
+        }
+      }
+    }
+  ],
+  "notes": [
+    "저장소 폴더에서 aider를 실행하면 바로 이 모델을 써요."
+  ]
+}

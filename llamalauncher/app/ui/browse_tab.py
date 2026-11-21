@@ -112,6 +112,12 @@ class BrowseTab(QWidget):
         self.set_format_options([("gguf", "GGUF — llama.cpp·Ollama·LM Studio 등")])
         return w
 
+    def select_category(self, cat_id: str) -> None:
+        for i in range(self.cat_list.count()):
+            if self.cat_list.item(i).data(Qt.UserRole) == cat_id:
+                self.cat_list.setCurrentRow(i)
+                return
+
     def set_format_options(self, options: list[tuple[str, str]]) -> None:
         """런처 설치 상태에 따라 고를 수 있는 형식 목록을 바꾼다."""
         self.fmt_combo.blockSignals(True)

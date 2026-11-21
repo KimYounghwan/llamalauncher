@@ -10,7 +10,7 @@ llama.cpp를 기본 엔진으로 사용하며 macOS와 Windows에서 동작합�
 - [x] 3단계: 허깅페이스 모델 검색(카테고리·적합도·추천 파일) + 다운로드(이어받기·검증)
 - [x] 4단계: 내 모델(LM Studio·Ollama 모델 자동 탐지, 폴더 가져오기) + 파일 직접 선택 + 채팅 테스트(스트리밍)
 - [x] 5단계: 런처 8종(llama.cpp·Ollama·LM Studio·KoboldCpp·MLX-LM·vLLM·Jan·text-generation-webui) 감지·자동 설치, 엔진별 서버 실행, 형식별(GGUF·MLX·safetensors) 모델 찾기
-- [ ] 6단계: 외부 개발 도구 연동
+- [x] 6단계: 개발 도구 연동 12종 (Claude Code·OpenCode·Codex는 실제 CLI로 동작 확인), 설정 병합·백업·되돌리기, 연결 테스트, Claude Code 호환 주소
 - [ ] 7단계: 첫 실행 마법사, 빌드
 
 ## 실행 방법
@@ -52,6 +52,9 @@ llamalauncher/
   app/core/downloader.py     # 다운로드 관리 (이어받기, 일시정지, SHA-256 검증, 동시 다운로드 제한)
   app/core/model_library.py  # 내 모델 목록 (받은 모델·직접 추가·폴더·LM Studio·Ollama), 삭제
   app/core/chat_client.py    # OpenAI 호환 API 스트리밍 채팅 (생각 과정 분리, 쉬운 오류 설명)
+  app/core/integrations/     # 개발 도구 연동: 템플릿 렌더링·호환성 점검(base), 병합·백업·복구(config_merge), 연결 테스트(tester)
+  app/core/compat_proxy.py   # Claude Code 호환 주소 (대화 중간 system 메시지 변환)
+  app/data/integrations/     # 도구별 설정 템플릿 (공식 문서 URL·확인 날짜·실제 확인한 버전)
   app/core/secrets_store.py  # 허깅페이스 토큰을 OS 키체인에 저장
   app/data/catalog.json      # 카테고리 정의, 검증된 제작자, 숨길 키워드 (앱 업데이트 없이 수정 가능)
   app/ui/                    # PySide6 화면

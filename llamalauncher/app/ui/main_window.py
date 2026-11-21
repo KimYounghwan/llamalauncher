@@ -17,11 +17,12 @@ from .browse_tab import BrowseTab
 from .chat_tab import ChatTab
 from .dashboard import DashboardTab
 from .downloads_tab import DownloadsTab
+from .integrations_tab import IntegrationsTab
 from .launchers_tab import LaunchersTab
 from .models_tab import ModelsTab
 from .server_tab import ServerTab
 
-UPCOMING_TABS = [("🔌 연동", 6)]
+UPCOMING_TABS: list[tuple[str, int]] = []
 
 STYLE = """
 QLabel#pageTitle { font-size: 22px; font-weight: 700; }
@@ -76,6 +77,12 @@ class MainWindow(QMainWindow):
         self.launchers.find_models.connect(self._find_models_for)
         self.server.open_launchers.connect(lambda: self.tabs.setCurrentIndex(self.launchers_index))
         self.browse.ollama_pull_requested.connect(self._ollama_pull)
+        self.integrations = IntegrationsTab()
+        self.integrations.context_provider = self._integration_context
+        self.integrations.go_to_server.connect(lambda: self.tabs.setCurrentIndex(self.server_index))
+        self.integrations.agent_preset_requested.connect(self._agent_preset)
+        self.integrations.find_models.connect(self._find_category)
+        self.integrations.detect_tools()
         self.server.name_for = self.models.display_name_for
         self.server.mmproj_for = self.models.mmproj_for
         self.models.in_use = lambda p: self.server.controller.is_active and self.server.running.get("model_path") == p
@@ -100,6 +107,7 @@ class MainWindow(QMainWindow):
         self.server_index = self.tabs.addTab(self.server, "▶️ 서버")
         self.chat_index = self.tabs.addTab(self.chat, "💬 채팅 테스트")
         self.launchers_index = self.tabs.addTab(self.launchers, "🚀 런처")
+        self.integrations_index = self.tabs.addTab(self.integrations, "🔌 연동")
         for name, stage in UPCOMING_TABS:
             placeholder = QLabel(f"{name.split(' ', 1)[1]} 기능은 {stage}단계에서 추가될 예정이에요.")
             placeholder.setAlignment(Qt.AlignCenter)
@@ -117,6 +125,9 @@ class MainWindow(QMainWindow):
         mark = {ServerState.RUNNING: " 🟢", ServerState.STARTING: " 🟡", ServerState.ERROR: " 🔴"}.get(state, "")
         self.tabs.setTabText(self.server_index, "▶️ 서버" + mark)
         self.chat.set_server(state, self.server.controller.base_url, self.server.running)
+        self._update_compat_proxy(state)
+        if hasattr(self, "integrations"):
+            self.integrations.refresh()
 
     def _on_download_requested(self, model: HFModel, quant: QuantFile, mmproj) -> None:
         system = self.dashboard.system
@@ -153,6 +164,69 @@ class MainWindow(QMainWindow):
         if st is not None and (cur is None or cur.installed != st.installed or cur.path != st.path):
             self.server.detect_launcher()
         self.models.refresh_later()
+
+    # ------------------------------------------------------------------ 개발 도구 연동
+    def _compat_port(self, server_port: int) -> int:
+        return server_port + self.settings.compat_proxy_offset if server_port + self.settings.compat_proxy_offset < 65536 \
+            else server_port - self.settings.compat_proxy_offset
+
+    def _update_compat_proxy(self, state: ServerState) -> None:
+        """서버가 켜지면 Claude Code 호환 주소(서버 포트 + 1000)를 함께 연다."""
+        from ..core.compat_proxy import CompatProxy
+        proxy = getattr(self, "compat_proxy", None)
+        if state == ServerState.RUNNING:
+            ctl = self.server.controller
+            if proxy and proxy.upstream == ctl.base_url:
+                return
+            if proxy:
+                proxy.stop()
+            port = self._compat_port(ctl.port)
+            try:
+                self.compat_proxy = CompatProxy(ctl.base_url, ctl.host, port)
+                self.compat_proxy.start()
+            except OSError as e:
+                self.compat_proxy = None
+                self.statusBar().showMessage(f"Claude Code 호환 주소(포트 {port})를 열지 못했어요: {e}", 8000)
+        elif state in (ServerState.STOPPED, ServerState.ERROR) and proxy:
+            proxy.stop()
+            self.compat_proxy = None
+
+    def _integration_context(self):
+        from ..core.integrations import Context
+        from ..core.netutil import client_host
+        srv = self.server
+        o = srv.current_options()
+        running = srv.controller.state == ServerState.RUNNING
+        info = srv.running if running else {}
+        mi = srv.model_info
+        tools = info.get("tools") if running else (mi.supports_tools if mi else None)
+        if running and not tools and info.get("engine") not in (None, "llamacpp", "koboldcpp"):
+            tools = None  # Ollama/MLX 등은 GGUF 템플릿으로 판단할 수 없음
+        if not mi and not running:
+            tools = None
+        return Context(
+            base_url=srv.controller.base_url if running else f"http://{client_host(o.host)}:{o.port}",
+            model=info.get("alias") or o.alias or "local-model", api_key=info.get("api_key", o.api_key) if running else o.api_key,
+            context=info.get("ctx_size", o.ctx_size), running=running,
+            engine_id=info.get("engine", srv.launcher.id), engine_name=info.get("engine_name", srv.launcher.name),
+            model_name=info.get("model_name") or (srv.name_for(str(mi.path)) if mi else ""),
+            supports_tools=tools, vision=bool(info.get("vision", bool(o.mmproj))), jinja=o.jinja, host=o.host,
+            total_ram=self.dashboard.system.total_ram if self.dashboard.system else 0,
+            anthropic_base_url=f"http://{client_host(o.host if not running else srv.controller.host)}:"
+                               f"{self._compat_port(srv.controller.port if running else o.port)}")
+
+    def _agent_preset(self) -> None:
+        from ..core.recommender import Preset
+        srv = self.server
+        srv.preset_combo.setCurrentIndex(srv.preset_combo.findData(Preset.AGENT.value))
+        srv.auto_configure(show_notes=True)
+        self.tabs.setCurrentIndex(self.server_index)
+        if srv.controller.is_active:
+            self.statusBar().showMessage("설정을 바꿨어요. [재시작]을 눌러야 서버에 반영돼요.", 8000)
+
+    def _find_category(self, cat_id: str) -> None:
+        self.browse.select_category(cat_id)
+        self.tabs.setCurrentIndex(self.tabs.indexOf(self.browse))
 
     def _use_engine(self, launcher_id: str) -> None:
         self.server.set_engine(launcher_id)
@@ -211,6 +285,9 @@ class MainWindow(QMainWindow):
                 return
         self.chat.shutdown()
         self.launchers.shutdown()
+        self.integrations.shutdown()
+        if getattr(self, "compat_proxy", None):
+            self.compat_proxy.stop()
         self.downloads.shutdown()
         self.server.shutdown()
         self.save_settings()

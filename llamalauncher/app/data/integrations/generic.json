@@ -1,0 +1,34 @@
+{
+  "id": "generic",
+  "order": 12,
+  "name": "직접 코딩 (OpenAI SDK·curl)",
+  "icon": "🐍",
+  "category": "chat",
+  "description": "파이썬·자바스크립트 프로그램이나 LangChain에서 쓰는 예제 코드.",
+  "docs_url": "https://github.com/openai/openai-python",
+  "checked": "2026-11-21",
+  "api": "chat",
+  "needs_tools": false,
+  "min_context": 4096,
+  "recommended_context": 8192,
+  "detect": {},
+  "snippets": [
+    {
+      "title": "Python (openai)",
+      "text": "from openai import OpenAI\n\nclient = OpenAI(base_url=\"{API_BASE}\", api_key=\"{API_KEY_OR_DUMMY}\")\nresp = client.chat.completions.create(\n    model=\"{MODEL}\",\n    messages=[{\"role\": \"user\", \"content\": \"안녕!\"}],\n)\nprint(resp.choices[0].message.content)\n"
+    },
+    {
+      "title": "JavaScript (openai)",
+      "text": "import OpenAI from \"openai\";\n\nconst client = new OpenAI({ baseURL: \"{API_BASE}\", apiKey: \"{API_KEY_OR_DUMMY}\" });\nconst resp = await client.chat.completions.create({\n  model: \"{MODEL}\",\n  messages: [{ role: \"user\", content: \"안녕!\" }],\n});\nconsole.log(resp.choices[0].message.content);\n"
+    },
+    {
+      "title": "LangChain (Python)",
+      "text": "from langchain_openai import ChatOpenAI\n\nllm = ChatOpenAI(base_url=\"{API_BASE}\", api_key=\"{API_KEY_OR_DUMMY}\", model=\"{MODEL}\")\nprint(llm.invoke(\"안녕!\").content)\n"
+    },
+    {
+      "title": "curl",
+      "text": "curl {API_BASE}/chat/completions \\\n  -H \"Content-Type: application/json\" \\\n  -H \"Authorization: Bearer {API_KEY_OR_DUMMY}\" \\\n  -d '{\"model\": \"{MODEL}\", \"messages\": [{\"role\": \"user\", \"content\": \"안녕!\"}]}'\n"
+    }
+  ],
+  "notes": []
+}

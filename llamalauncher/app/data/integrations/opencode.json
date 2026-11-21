@@ -1,0 +1,56 @@
+{
+  "id": "opencode",
+  "order": 2,
+  "name": "OpenCode",
+  "icon": "🟩",
+  "category": "agent",
+  "description": "터미널에서 쓰는 오픈소스 코딩 에이전트.",
+  "docs_url": "https://opencode.ai/docs/providers/",
+  "checked": "2026-11-21",
+  "api": "chat",
+  "needs_tools": true,
+  "min_context": 32768,
+  "recommended_context": 65536,
+  "detect": {
+    "commands": [
+      "opencode"
+    ],
+    "paths": [
+      "~/.config/opencode"
+    ]
+  },
+  "files": [
+    {
+      "path": "~/.config/opencode/opencode.json",
+      "format": "jsonc",
+      "template": {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+          "llamalauncher": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "라마런처 (로컬)",
+            "options": {
+              "baseURL": "{API_BASE}",
+              "apiKey": "{API_KEY_OR_DUMMY}"
+            },
+            "models": {
+              "{MODEL}": {
+                "name": "{MODEL_NAME}",
+                "limit": {
+                  "context": "{CONTEXT}",
+                  "output": "{OUTPUT}"
+                }
+              }
+            }
+          }
+        },
+        "model": "llamalauncher/{MODEL}"
+      }
+    }
+  ],
+  "notes": [
+    "적용하면 OpenCode의 기본 모델이 라마런처 모델로 바뀌어요. OpenCode 안에서 /models로 다른 모델로 바꿀 수 있어요.",
+    "OpenCode 설정 형식은 버전마다 달라요. 이 설정은 opencode 1.18에서 확인했어요. 동작하지 않으면 OpenCode를 업데이트하거나 공식 문서를 확인해 주세요."
+  ],
+  "verified": "opencode 1.18.18에서 실제 동작 확인 (provider + npm @ai-sdk/openai-compatible 형식)"
+}

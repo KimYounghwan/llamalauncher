@@ -1,0 +1,35 @@
+{
+  "id": "openwebui",
+  "order": 11,
+  "name": "Open WebUI 등 채팅 앱",
+  "icon": "💬",
+  "category": "chat",
+  "description": "ChatGPT처럼 쓰는 웹 채팅 화면. 다른 OpenAI 호환 앱도 같은 값을 넣으면 돼요.",
+  "docs_url": "https://docs.openwebui.com/getting-started/quick-start/starting-with-openai-compatible",
+  "checked": "2026-11-21",
+  "api": "chat",
+  "needs_tools": false,
+  "min_context": 4096,
+  "recommended_context": 8192,
+  "detect": {
+    "commands": [
+      "open-webui"
+    ]
+  },
+  "steps": [
+    "Open WebUI → 관리자 설정(Admin Settings) → Connections로 가요.",
+    "OpenAI API 연결을 추가하고 아래 주소와 키를 넣어요.",
+    "Docker로 Open WebUI를 실행 중이면 주소의 127.0.0.1 대신 host.docker.internal을 쓰세요."
+  ],
+  "copy_values": [
+    [
+      "API 주소",
+      "{API_BASE}"
+    ],
+    [
+      "API Key",
+      "{API_KEY_OR_DUMMY}"
+    ]
+  ],
+  "notes": []
+}

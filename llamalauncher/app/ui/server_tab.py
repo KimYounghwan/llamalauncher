@@ -20,6 +20,7 @@ from ..core import gguf
 from ..core.hardware import SystemInfo, format_bytes
 from ..core.launchers import all_launchers, by_id
 from ..core.launchers.base import LauncherStatus
+from ..core.secrets_store import get_server_api_key, set_server_api_key
 from ..core.netutil import find_free_port, generate_api_key, is_port_free, lan_ip
 from ..core.recommender import (
     CTX_STEPS, Fit, ModelSpec, Preset, ServerOptions, assess_fit, build_server_args, format_command, recommend,
@@ -112,7 +113,9 @@ class ServerTab(QWidget):
         split.setSizes([520, 240])
         root.addWidget(split, 1)
 
-        self._load_options(ServerOptions.from_dict(settings.server_options))
+        saved = ServerOptions.from_dict(settings.server_options)
+        saved.api_key = get_server_api_key() or ""  # 키는 설정 파일이 아니라 OS 키체인에
+        self._load_options(saved)
         self._refresh_model_combo()
         self.detect_launcher()
         if settings.last_model and Path(settings.last_model).exists():
@@ -202,7 +205,8 @@ class ServerTab(QWidget):
         self.preset_combo = QComboBox()
         for p in Preset:
             self.preset_combo.addItem(p.label, p.value)
-        self.preset_combo.setToolTip("빠르게: 짧은 대화, 빠른 응답 / 균형: 일반적인 사용 / 긴 대화용: 긴 문서·코딩")
+        self.preset_combo.setToolTip("빠르게: 짧은 대화, 빠른 응답 / 균형: 일반적인 사용 / 긴 대화용: 긴 문서 / "
+                                     "코딩 에이전트용: Claude Code·OpenCode 등 연동 (64K 문맥, 도구 호출, API 키)")
         idx = self.preset_combo.findData(self.settings.server_preset)
         self.preset_combo.setCurrentIndex(max(0, idx))
         self.auto_btn = QPushButton("🪄 이 컴퓨터에 맞게 자동 설정")
@@ -748,6 +752,12 @@ class ServerTab(QWidget):
             setattr(merged, name, getattr(rec.options, name))
         if not merged.alias:
             merged.alias = "local-model"
+        if preset == Preset.AGENT:  # 외부 도구 연동용: 모델 이름 고정, 키 자동 생성, 도구 호출
+            merged.jinja, merged.parallel = True, 1
+            if merged.alias == "local-model":
+                merged.alias = "local-coder"
+            if not merged.api_key:
+                merged.api_key = generate_api_key()
         self._load_options(merged)
         self.notes_lbl.setText(f"🪄 ‘{preset.label}’ 기준으로 설정했어요.\n• " + "\n• ".join(rec.notes))
 
@@ -811,6 +821,8 @@ class ServerTab(QWidget):
                 return
 
         self.settings.server_options = {k: v for k, v in o.to_dict().items() if k not in ("api_key", "mmproj")}
+        if (get_server_api_key() or "") != o.api_key:
+            set_server_api_key(o.api_key or None)
         self.save_settings()
         try:
             spec = self.launcher.serve_spec(st, model, o, self.system)

@@ -1,0 +1,48 @@
+{
+  "id": "cline",
+  "order": 4,
+  "name": "Cline · Roo Code · Kilo Code",
+  "icon": "🧩",
+  "category": "agent",
+  "description": "VS Code의 코딩 에이전트 확장들. 확장 화면에서 직접 설정해요.",
+  "docs_url": "https://docs.cline.bot/provider-config/openai-compatible",
+  "checked": "2026-11-21",
+  "api": "chat",
+  "needs_tools": true,
+  "min_context": 32768,
+  "recommended_context": 65536,
+  "detect": {
+    "vscode_extensions": [
+      "saoudrizwan.claude-dev",
+      "rooveterinaryinc.roo-cline",
+      "kilocode.kilo-code"
+    ]
+  },
+  "steps": [
+    "VS Code 왼쪽에서 Cline(또는 Roo Code·Kilo Code) 아이콘을 눌러요.",
+    "⚙️ 설정 → API Provider에서 **OpenAI Compatible**을 골라요.",
+    "아래 값을 복사해 Base URL, API Key, Model ID에 붙여 넣어요.",
+    "Model Configuration의 Context Window에 문맥 길이를 넣고 저장해요."
+  ],
+  "copy_values": [
+    [
+      "Base URL",
+      "{API_BASE}"
+    ],
+    [
+      "API Key",
+      "{API_KEY_OR_DUMMY}"
+    ],
+    [
+      "Model ID",
+      "{MODEL}"
+    ],
+    [
+      "Context Window",
+      "{CONTEXT}"
+    ]
+  ],
+  "notes": [
+    "Ollama·LM Studio 엔진을 쓸 때는 Provider에서 Ollama / LM Studio를 직접 골라도 돼요."
+  ]
+}

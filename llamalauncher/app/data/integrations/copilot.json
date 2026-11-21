@@ -1,0 +1,42 @@
+{
+  "id": "copilot",
+  "order": 5,
+  "name": "GitHub Copilot (내 모델 연결)",
+  "icon": "🐙",
+  "category": "agent",
+  "description": "VS Code Copilot 채팅에 로컬 모델을 연결 (BYOK).",
+  "docs_url": "https://code.visualstudio.com/docs/copilot/customization/language-models",
+  "checked": "2026-11-21",
+  "api": "chat",
+  "needs_tools": true,
+  "min_context": 32768,
+  "recommended_context": 65536,
+  "detect": {
+    "vscode_extensions": [
+      "github.copilot-chat"
+    ]
+  },
+  "steps": [
+    "VS Code에서 Copilot 채팅 창을 열어요.",
+    "모델 선택 메뉴 → **Manage Models…**를 눌러요.",
+    "**OpenAI Compatible**(또는 엔진이 Ollama면 Ollama)을 고르고 아래 주소·모델 이름·키를 넣어요.",
+    "모델 목록에서 방금 추가한 모델을 골라요."
+  ],
+  "copy_values": [
+    [
+      "주소",
+      "{API_BASE}"
+    ],
+    [
+      "모델 이름",
+      "{MODEL}"
+    ],
+    [
+      "API Key",
+      "{API_KEY_OR_DUMMY}"
+    ]
+  ],
+  "notes": [
+    "Copilot 플랜·VS Code 버전에 따라 이 메뉴가 없을 수 있어요. 그럴 때는 Continue나 Cline을 쓰세요."
+  ]
+}

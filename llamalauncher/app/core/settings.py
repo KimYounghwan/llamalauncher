@@ -38,7 +38,8 @@ class Settings:
     hf_trusted_only: bool = False
     max_downloads: int = 2
     server_engine: str = "llamacpp"
-    hf_format: str = "gguf"           # 모델 찾기에서 검색할 형식   # 서버 탭에서 쓰는 실행 엔진 (런처 id)
+    hf_format: str = "gguf"           # 모델 찾기에서 검색할 형식
+    compat_proxy_offset: int = 1000   # Claude Code 호환 주소 = 서버 포트 + 이 값   # 서버 탭에서 쓰는 실행 엔진 (런처 id)
     # 내 모델
     added_models: list[str] = field(default_factory=list)     # [파일 직접 선택]으로 추가한 파일
     model_folders: list[str] = field(default_factory=list)    # 스캔해서 가져온 폴더

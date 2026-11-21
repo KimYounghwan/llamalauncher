@@ -1,0 +1,59 @@
+{
+  "id": "zed",
+  "order": 8,
+  "name": "Zed",
+  "icon": "⚡",
+  "category": "edit",
+  "description": "빠른 코드 에디터. AI 패널에서 OpenAI 호환 모델을 쓸 수 있어요.",
+  "docs_url": "https://zed.dev/docs/ai/use-api-access",
+  "checked": "2026-11-21",
+  "api": "chat",
+  "needs_tools": false,
+  "min_context": 8192,
+  "recommended_context": 32768,
+  "detect": {
+    "commands": [
+      "zed"
+    ],
+    "paths": [
+      "~/.config/zed",
+      "/Applications/Zed.app"
+    ]
+  },
+  "files": [
+    {
+      "path": "~/.config/zed/settings.json",
+      "path_win32": "%APPDATA%/Zed/settings.json",
+      "format": "jsonc",
+      "template": {
+        "language_models": {
+          "openai_compatible": {
+            "llamalauncher": {
+              "api_url": "{API_BASE}",
+              "available_models": [
+                {
+                  "name": "{MODEL}",
+                  "display_name": "{MODEL_NAME} (라마런처)",
+                  "max_tokens": "{CONTEXT}",
+                  "max_output_tokens": "{OUTPUT}",
+                  "capabilities": {
+                    "tools": "{TOOLS}",
+                    "images": "{VISION}",
+                    "parallel_tool_calls": false
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "env": {
+    "$if": "api_key",
+    "LLAMALAUNCHER_API_KEY": "{API_KEY}"
+  },
+  "notes": [
+    "API 키는 설정 파일이 아니라 Zed의 에이전트 설정 화면에 넣거나 환경 변수 LLAMALAUNCHER_API_KEY로 줘요."
+  ]
+}

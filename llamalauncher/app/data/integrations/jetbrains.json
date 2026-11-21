@@ -1,0 +1,32 @@
+{
+  "id": "jetbrains",
+  "order": 9,
+  "name": "JetBrains AI Assistant",
+  "icon": "🧠",
+  "category": "edit",
+  "description": "IntelliJ·PyCharm 등 JetBrains IDE의 AI 도우미.",
+  "docs_url": "https://www.jetbrains.com/help/ai-assistant/use-custom-models.html",
+  "checked": "2026-11-21",
+  "api": "chat",
+  "needs_tools": false,
+  "min_context": 8192,
+  "recommended_context": 32768,
+  "detect": {},
+  "steps": [
+    "설정(Settings) → Tools → AI Assistant → Models로 가요.",
+    "로컬 모델 제공자에서 **OpenAI-compatible**(엔진이 Ollama·LM Studio면 해당 항목)을 켜요.",
+    "아래 주소를 넣고 [Test Connection]을 눌러요.",
+    "채팅 모델로 아래 모델 이름을 골라요."
+  ],
+  "copy_values": [
+    [
+      "주소",
+      "{API_BASE}"
+    ],
+    [
+      "모델 이름",
+      "{MODEL}"
+    ]
+  ],
+  "notes": []
+}

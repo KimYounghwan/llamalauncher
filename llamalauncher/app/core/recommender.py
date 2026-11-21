@@ -40,14 +40,15 @@ class Preset(str, Enum):
     FAST = "fast"
     BALANCED = "balanced"
     LONG = "long"
+    AGENT = "agent"
 
     @property
     def label(self) -> str:
-        return {"fast": "빠르게", "balanced": "균형", "long": "긴 대화용"}[self.value]
+        return {"fast": "빠르게", "balanced": "균형", "long": "긴 대화용", "agent": "코딩 에이전트용"}[self.value]
 
     @property
     def ctx_target(self) -> int:
-        return {"fast": 4096, "balanced": 16384, "long": 131072}[self.value]
+        return {"fast": 4096, "balanced": 16384, "long": 131072, "agent": 65536}[self.value]
 
 
 @dataclass
@@ -237,6 +238,18 @@ def recommend(system: SystemInfo, model: ModelSpec, preset: Preset = Preset.BALA
     # 4) 배치 크기: 메모리가 빠듯하면 줄인다
     if system.fast_budget < 8 * GB:
         opts.batch_size, opts.ubatch_size = 512, 256
+
+    # 5) 코딩 에이전트용: 도구 호출(--jinja), 요청 1개에 문맥 전부, Flash Attention
+    if preset == Preset.AGENT:
+        opts.jinja = True
+        opts.parallel = 1
+        if has_gpu:
+            opts.flash_attn = "on"
+        if ctx < 32768:
+            notes.append(f"⚠️ 메모리 때문에 문맥 길이가 {ctx:,}에 그쳐요. 코딩 에이전트는 32K 이상이 필요해서 "
+                         "더 작은 모델이나 양자화를 권장해요.")
+        else:
+            notes.append(f"코딩 에이전트용으로 문맥 길이를 {ctx:,}까지 늘리고 도구 호출(--jinja)을 켰어요.")
 
     notes.insert(0, f"CPU 스레드는 {opts.threads}개 (성능 코어 수 기준)를 사용해요.")
     if model.n_ctx_train and ctx >= model.n_ctx_train:

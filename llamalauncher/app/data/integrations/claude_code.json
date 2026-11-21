@@ -1,0 +1,51 @@
+{
+  "id": "claude_code",
+  "order": 1,
+  "name": "Claude Code",
+  "icon": "🤖",
+  "category": "agent",
+  "description": "Anthropic의 코딩 에이전트 (터미널 CLI + VS Code·JetBrains 확장). CLI와 확장이 같은 설정 파일을 읽어요.",
+  "docs_url": "https://code.claude.com/docs/en/model-config",
+  "checked": "2026-11-21",
+  "api": "messages",
+  "needs_tools": true,
+  "min_context": 32768,
+  "recommended_context": 65536,
+  "detect": {
+    "commands": [
+      "claude"
+    ],
+    "vscode_extensions": [
+      "anthropic.claude-code"
+    ],
+    "paths": [
+      "~/.claude"
+    ]
+  },
+  "files": [
+    {
+      "path": "~/.claude/settings.json",
+      "format": "json",
+      "template": {
+        "env": {
+          "ANTHROPIC_BASE_URL": "{ANTHROPIC_BASE_URL}",
+          "ANTHROPIC_AUTH_TOKEN": "{API_KEY_OR_DUMMY}",
+          "ANTHROPIC_MODEL": "{MODEL}",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "{MODEL}",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "{MODEL}",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{MODEL}",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "{CONTEXT_STR}"
+        }
+      }
+    }
+  ],
+  "notes": [
+    "Claude Code는 시스템 프롬프트와 도구 정의가 길어서 문맥 길이 64K 이상을 권장해요 (서버 탭 프리셋: 코딩 에이전트용).",
+    "라마런처는 서버를 켜면 Claude Code용 호환 주소(서버 포트 + 1000)를 함께 열어요. 최신 Claude Code가 대화 중간에 보내는 system 메시지를 많은 모델(Qwen 계열 등)이 거부하는 문제를 이 주소에서 고쳐 줘요.",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS로 서버의 문맥 길이를 알려 줘요. 서버 문맥 길이를 바꾸면 [다시 적용]을 눌러 주세요.",
+    "적용하면 Claude Code가 Anthropic 계정 대신 이 컴퓨터의 모델을 써요. 원래대로 쓰려면 [원래대로 되돌리기]를 누르세요.",
+    "적용 후 Claude Code(또는 VS Code)를 다시 시작해야 반영돼요. '모델을 인식하지 못했다'는 안내는 무시해도 돼요."
+  ],
+  "verified": "Claude Code 2.1.330에서 실제 동작 확인 (호환 주소 사용)"
+}
