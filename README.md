@@ -6,7 +6,7 @@ llama.cpp를 기본 엔진으로 사용하며 macOS와 Windows에서 동작합�
 ## 진행 상황
 
 - [x] 1단계: 시스템 사양 감지 + 추천 옵션 계산 + 테스트 + 대시보드 화면
-- [ ] 2단계: llama.cpp 런처 감지/실행 + 서버 탭 + 옵션/자동 설정
+- [x] 2단계: llama.cpp 런처 감지/실행 + 서버 탭 + 옵션/자동 설정 (+ GGUF 메타데이터 읽기)
 - [ ] 3단계: 허깅페이스 모델 검색 + 다운로드
 - [ ] 4단계: 내 모델 + 파일 직접 선택 + 채팅 테스트
 - [ ] 5단계: 다른 런처 어댑터 + 자동 설치
@@ -42,6 +42,11 @@ llamalauncher/
   app/core/hardware.py       # 사양 감지 (macOS: sysctl/system_profiler, Windows: 레지스트리/nvidia-smi, Linux: nvidia-smi/rocm-smi)
   app/core/recommender.py    # 메모리 계산, 적합도(쾌적/느림/부족), llama-server 추천 옵션
   app/core/settings.py       # 설정 저장 (OS별 사용자 설정 폴더)
+  app/core/gguf.py           # GGUF 헤더(층 수, 최대 문맥, 채팅 템플릿) 읽기
+  app/core/launchers/        # 런처 감지 (llamacpp.py: 경로 탐색, 버전, 지원 옵션 확인)
+  app/core/server.py         # llama-server 실행/중지/상태 감시 (QProcess)
+  app/core/server_log.py     # 로그 분류, 속도 추출, 오류를 쉬운 말로 설명
+  app/core/netutil.py        # 포트 확인, 내 IP, API 키 생성
   app/ui/                    # PySide6 화면
 tests/                       # Windows/Linux 출력은 가짜 데이터(mock)로 검증
 ```

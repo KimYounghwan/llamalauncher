@@ -15,6 +15,10 @@ def config_dir() -> Path:
     return Path(user_config_dir(APP_NAME, appauthor=False))
 
 
+def logs_dir() -> Path:
+    return config_dir() / "logs"
+
+
 def default_models_dir() -> Path:
     return Path.home() / APP_NAME / "models"
 
@@ -25,6 +29,18 @@ class Settings:
     theme: str = "system"  # system | light | dark
     first_run_done: bool = False
     launcher_paths: dict[str, str] = field(default_factory=dict)
+    recent_models: list[str] = field(default_factory=list)
+    last_model: str = ""
+    server_options: dict = field(default_factory=dict)  # 마지막으로 쓴 ServerOptions
+    server_preset: str = "balanced"
+    user_presets: dict[str, dict] = field(default_factory=dict)
+
+    MAX_RECENT = 15
+
+    def add_recent_model(self, path: str) -> None:
+        self.recent_models = [path] + [p for p in self.recent_models if p != path]
+        del self.recent_models[self.MAX_RECENT:]
+        self.last_model = path
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Settings":

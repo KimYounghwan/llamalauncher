@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from typing import Optional
 
@@ -66,6 +66,12 @@ class ModelSpec:
         """파라미터 수(십억 단위)와 양자화로 파일 크기를 추정한다."""
         bits = QUANT_BITS.get(quant.upper(), 4.85)
         return cls(file_size=int(params_b * 1e9 * bits / 8), **kw)
+
+    @classmethod
+    def from_gguf(cls, info) -> "ModelSpec":
+        """gguf.GGUFInfo에서 만든다."""
+        return cls(file_size=info.file_size, n_layers=info.n_layers, n_ctx_train=info.n_ctx_train,
+                   n_head_kv=info.n_head_kv, head_dim=info.head_dim, name=info.display_name)
 
     @property
     def layers(self) -> int:
@@ -140,6 +146,21 @@ class ServerOptions:
     min_p: float = 0.05
     repeat_penalty: float = 1.1
     jinja: bool = True
+    alias: str = ""
+    api_key: str = ""
+    extra_args: str = ""  # 고급: 직접 추가하는 인자
+
+    # 실행 환경(하드웨어/모델)에 따라 정해지는 값 — 사용자 프리셋에는 저장하지 않는다
+    HARDWARE_FIELDS = ("ctx_size", "n_gpu_layers", "threads", "batch_size", "ubatch_size",
+                       "flash_attn", "cache_type_k", "cache_type_v")
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ServerOptions":
+        names = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in (data or {}).items() if k in names})
 
 
 @dataclass
@@ -223,8 +244,15 @@ def recommend(system: SystemInfo, model: ModelSpec, preset: Preset = Preset.BALA
     return Recommendation(options=opts, fit=assess_fit(system, model, ctx), notes=notes)
 
 
-def build_server_args(opts: ServerOptions, model_path: str, alias: Optional[str] = None) -> list[str]:
-    """ServerOptions를 llama-server 명령줄 인자로 바꾼다 (실행 파일 경로 제외)."""
+ALL_CAPS = frozenset({"fa_value", "alias", "api_key", "jinja", "cache_type_v", "min_p", "no_mmap", "mlock"})
+
+
+def build_server_args(opts: ServerOptions, model_path: str, alias: Optional[str] = None,
+                      caps: frozenset[str] | set[str] = ALL_CAPS) -> list[str]:
+    """ServerOptions를 llama-server 명령줄 인자로 바꾼다 (실행 파일 경로 제외).
+
+    caps: 설치된 llama-server가 지원하는 기능 (launchers.llamacpp.parse_capabilities)
+    """
     args = [
         "-m", model_path,
         "-c", str(opts.ctx_size),
@@ -232,29 +260,59 @@ def build_server_args(opts: ServerOptions, model_path: str, alias: Optional[str]
         "-t", str(opts.threads),
         "-b", str(opts.batch_size),
         "-ub", str(opts.ubatch_size),
-        "-fa", opts.flash_attn,
+    ]
+    if "fa_value" in caps:
+        args += ["-fa", opts.flash_attn]
+    elif opts.flash_attn == "on":
+        args.append("-fa")  # 예전 버전은 켜기 플래그만 있다
+    args += [
         "-np", str(opts.parallel),
         "--host", opts.host,
         "--port", str(opts.port),
         "--temp", f"{opts.temperature:g}",
         "--top-p", f"{opts.top_p:g}",
         "--top-k", str(opts.top_k),
-        "--min-p", f"{opts.min_p:g}",
-        "--repeat-penalty", f"{opts.repeat_penalty:g}",
     ]
+    if "min_p" in caps:
+        args += ["--min-p", f"{opts.min_p:g}"]
+    args += ["--repeat-penalty", f"{opts.repeat_penalty:g}"]
     if opts.cache_type_k != "f16":
         args += ["--cache-type-k", opts.cache_type_k]
-    if opts.cache_type_v != "f16":
+    if opts.cache_type_v != "f16" and "cache_type_v" in caps:
         args += ["--cache-type-v", opts.cache_type_v]
-    if opts.mlock:
+    if opts.mlock and "mlock" in caps:
         args.append("--mlock")
-    if opts.no_mmap:
+    if opts.no_mmap and "no_mmap" in caps:
         args.append("--no-mmap")
-    if opts.jinja:
+    if opts.jinja and "jinja" in caps:
         args.append("--jinja")
-    if alias:
-        args += ["--alias", alias]
+    name = alias or opts.alias
+    if name and "alias" in caps:
+        args += ["--alias", name]
+    if opts.api_key and "api_key" in caps:
+        args += ["--api-key", opts.api_key]
+    if opts.extra_args.strip():
+        args += split_args(opts.extra_args)
     return args
+
+
+def split_args(text: str) -> list[str]:
+    import shlex
+    try:
+        return shlex.split(text, posix=True)
+    except ValueError:
+        return text.split()
+
+
+def format_command(argv: list[str], api_key: str = "") -> str:
+    """미리보기/복사용 명령어 문자열 (OS에 맞는 따옴표, API 키는 가림)."""
+    import shlex
+    import subprocess
+    import sys
+    shown = ["********" if api_key and a == api_key else a for a in argv]
+    if sys.platform == "win32":
+        return subprocess.list2cmdline(shown)
+    return shlex.join(shown)
 
 
 # ---------------------------------------------------------------------------
