@@ -50,6 +50,7 @@ class LocalModel:
     error: str = ""
     fmt: str = "gguf"       # gguf | mlx | safetensors (뒤의 둘은 폴더)
     dir_meta: dict = field(default_factory=dict)   # 폴더형 모델의 config.json 요약
+    manifest: Optional[Path] = None   # Ollama 모델의 매니페스트 파일
 
     @property
     def key(self) -> str:
@@ -74,8 +75,12 @@ class LocalModel:
 
     @property
     def deletable(self) -> bool:
-        """Ollama 모델은 Ollama가, HF 캐시는 huggingface 도구가 관리하는 파일이라 직접 지우지 않는다."""
-        return self.source not in (Source.OLLAMA, Source.HFCACHE)
+        """Ollama 모델은 매니페스트가 있어야, HF 캐시는 저장소 폴더를 찾을 수 있어야 지울 수 있다."""
+        if self.source == Source.OLLAMA:
+            return self.manifest is not None
+        if self.source == Source.HFCACHE:
+            return hf_cache_repo(self.path) is not None
+        return True
 
 
 def quant_from_name(name: str) -> str:
@@ -237,8 +242,68 @@ def scan_ollama(models: Path) -> list[LocalModel]:
         out.append(LocalModel(
             path=blob, source=Source.OLLAMA, name=name, size=int(model_layer.get("size") or 0),
             date=datetime.fromtimestamp(mf.stat().st_mtime),
-            mmproj=_blob(models, proj["digest"]) if proj and proj.get("digest") else None))
+            mmproj=_blob(models, proj["digest"]) if proj and proj.get("digest") else None, manifest=mf))
     return out
+
+
+def hf_cache_repo(snapshot: Path) -> Optional[Path]:
+    """HF 캐시 스냅샷 폴더(models--a--b/snapshots/<rev>)에서 저장소 폴더(models--a--b)를 찾는다."""
+    repo = snapshot.parent.parent
+    if snapshot.parent.name == "snapshots" and repo.name.startswith("models--") and repo.is_dir():
+        return repo
+    return None
+
+
+def _manifest_digests(mf: Path) -> set[str]:
+    try:
+        data = json.loads(mf.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return set()
+    layers = list(data.get("layers") or []) + ([data["config"]] if isinstance(data.get("config"), dict) else [])
+    return {l["digest"] for l in layers if isinstance(l, dict) and l.get("digest")}
+
+
+def ollama_store_of(m: LocalModel) -> Optional[Path]:
+    """Ollama 모델의 저장소 폴더 (blobs와 manifests가 있는 곳)."""
+    return m.path.parent.parent if m.manifest and m.path.parent.name == "blobs" else None
+
+
+def delete_ollama_model(m: LocalModel) -> list[Path]:
+    """`ollama rm`과 같은 일: 매니페스트를 지우고, 다른 모델이 쓰지 않는 blob만 지운다."""
+    store = ollama_store_of(m)
+    if not store or not m.manifest:
+        raise PermissionError("Ollama 모델 정보를 찾지 못했어요. 터미널에서 'ollama rm 이름'으로 지워 주세요.")
+    mine = _manifest_digests(m.manifest)
+    mroot = store / "manifests"
+    others: set[str] = set()
+    for mf in mroot.rglob("*"):
+        if mf.is_file() and mf != m.manifest and not mf.name.startswith("."):
+            others |= _manifest_digests(mf)
+    removed = []
+    m.manifest.unlink(missing_ok=True)
+    removed.append(m.manifest)
+    for d in sorted(mine - others):
+        b = _blob(store, d)
+        if b.is_file():
+            b.unlink()
+            removed.append(b)
+    _prune_empty(m.manifest.parent, mroot)
+    return removed
+
+
+def _prune_empty(start: Path, stop: Path) -> None:
+    """start에서 위로 올라가며 빈 폴더를 지운다 (stop 폴더 자체와 그 밖은 건드리지 않음)."""
+    try:
+        cur, root = start.resolve(), stop.resolve()
+        while cur != root and root in cur.parents:
+            if any(x.name != ".DS_Store" for x in cur.iterdir()):
+                break
+            for x in cur.iterdir():
+                x.unlink()
+            cur.rmdir()
+            cur = cur.parent
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------- 정보 채우기
@@ -396,7 +461,20 @@ def collect(src: LibrarySources, read_headers: bool = True) -> list[LocalModel]:
 
 # ---------------------------------------------------------------- 삭제
 def files_of(m: LocalModel, others: Iterable[LocalModel] = ()) -> list[Path]:
-    """삭제할 파일: 모델(분할 조각 포함) + 같은 폴더의 다른 모델이 쓰지 않는 비전 파일."""
+    """삭제할 파일: 모델(분할 조각 포함) + 같은 폴더의 다른 모델이 쓰지 않는 비전 파일.
+    Ollama는 다른 모델과 같이 쓰지 않는 blob, HF 캐시는 저장소 폴더 통째."""
+    if m.source == Source.HFCACHE:
+        repo = hf_cache_repo(m.path)
+        return [repo] if repo else []
+    if m.source == Source.OLLAMA:
+        store = ollama_store_of(m)
+        if not store or not m.manifest:
+            return []
+        others: set[str] = set()
+        for mf in (store / "manifests").rglob("*"):
+            if mf.is_file() and mf != m.manifest and not mf.name.startswith("."):
+                others |= _manifest_digests(mf)
+        return [_blob(store, d) for d in sorted(_manifest_digests(m.manifest) - others) if _blob(store, d).is_file()]
     if m.path.is_dir():
         return [m.path]
     files = [p for p in gguf.split_parts(m.path) if p.exists()]
@@ -409,7 +487,9 @@ def files_of(m: LocalModel, others: Iterable[LocalModel] = ()) -> list[Path]:
 
 def delete_model(m: LocalModel, models_dir: Path, others: Iterable[LocalModel] = ()) -> list[Path]:
     if not m.deletable:
-        raise PermissionError("Ollama 모델은 Ollama에서 지워 주세요 (터미널: ollama rm 이름).")
+        raise PermissionError("이 모델은 지울 수 없어요.")
+    if m.source == Source.OLLAMA:
+        return delete_ollama_model(m)
     removed = []
     for p in files_of(m, others):
         if p.is_dir():
@@ -427,17 +507,23 @@ def delete_model(m: LocalModel, models_dir: Path, others: Iterable[LocalModel] =
         except OSError:
             pass
     # 비어 버린 저장소 폴더 정리 (models_dir 안에서만)
-    try:
-        parent = m.path.parent
-        mroot = Path(models_dir).resolve()
-        while parent.resolve() != mroot and mroot in parent.resolve().parents:
-            leftovers = [x for x in parent.iterdir() if x.name not in (".DS_Store", MANIFEST_NAME)]
-            if leftovers:
-                break
-            for x in parent.iterdir():
-                x.unlink()
-            parent.rmdir()
-            parent = parent.parent
-    except OSError:
-        pass
+    _prune_empty(m.path.parent, Path(models_dir))
     return removed
+
+
+def size_on_disk(paths: Iterable[Path]) -> int:
+    total = 0
+    for p in paths:
+        try:
+            if p.is_dir():
+                total += sum(f.stat().st_size for f in p.rglob("*") if f.is_file() and not f.is_symlink())
+            elif p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def engine_accepts(formats: Iterable[str], m: LocalModel) -> bool:
+    """이 엔진(지원 형식 목록)으로 이 모델을 실행할 수 있는지."""
+    return not m.error and m.fmt in tuple(formats)

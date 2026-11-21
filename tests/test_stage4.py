@@ -81,7 +81,7 @@ def test_scan_ollama(tmp_path):
     found = lib.scan_ollama(models)
     assert [m.name for m in found] == ["gemma3:4b"]
     assert found[0].mmproj == models / "blobs" / "sha256-proj"
-    assert not found[0].deletable
+    assert found[0].deletable  # 매니페스트를 알면 지울 수 있다
 
 
 def test_collect_all_sources_dedup_and_headers(tmp_path):
@@ -145,11 +145,17 @@ def test_delete_split_model_keeps_shared_mmproj_and_cleans_dirs(tmp_path):
     assert not repo.exists() and not (mdir / "org").exists() and mdir.exists()
 
 
-def test_delete_ollama_refused(tmp_path):
-    m = lib.scan_ollama(_ollama(tmp_path))[0]
-    with pytest.raises(PermissionError):
-        lib.delete_model(m, tmp_path / "models")
-    assert m.path.exists()
+def test_delete_ollama_model_keeps_shared_blobs(tmp_path):
+    models = _ollama(tmp_path)
+    _ollama(tmp_path, name="qwen", tag="1b")  # 템플릿 blob(sha256:tmpl)을 같이 쓴다
+    make_model(models / "blobs" / "sha256-tmpl")
+    found = {m.name: m for m in lib.scan_ollama(models)}
+    g = found["gemma3:4b"]
+    assert g.deletable and lib.files_of(g) == [g.path]  # 같이 쓰는 템플릿은 지울 목록에 없다
+    lib.delete_model(g, tmp_path / "models")
+    assert not g.path.exists() and not g.manifest.exists() and not g.manifest.parent.exists()
+    assert (models / "blobs" / "sha256-tmpl").exists() and found["qwen:1b"].path.exists()
+    assert [m.name for m in lib.scan_ollama(models)] == ["qwen:1b"]
 
 
 # ---------------------------------------------------------------- 채팅 클라이언트

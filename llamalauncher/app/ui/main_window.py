@@ -86,6 +86,7 @@ class MainWindow(QMainWindow):
         self.integrations.detect_tools()
         self.server.name_for = self.models.display_name_for
         self.server.mmproj_for = self.models.mmproj_for
+        self.server.library = lambda: self.models.models
         self.models.in_use = lambda p: self.server.controller.is_active and self.server.running.get("model_path") == p
         self.dashboard.system_detected.connect(self.server.set_system)
         self.dashboard.system_detected.connect(self.browse.set_system)

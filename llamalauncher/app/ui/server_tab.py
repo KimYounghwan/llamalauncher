@@ -88,6 +88,7 @@ class ServerTab(QWidget):
         # 내 모델 탭이 채워 주는 도우미 (표시 이름, Ollama처럼 같은 폴더에 없는 비전 파일)
         self.name_for: Callable[[str], str] = lambda p: Path(p).name
         self.mmproj_for: Callable[[str], Optional[str]] = lambda p: None
+        self.library: Callable[[], list] = lambda: []   # 내 모델 탭의 모델 목록 (LocalModel)
         self.running: dict = {}  # 실행 중인 서버 정보 (채팅 탭에서 사용)
         self.controller = ServerController(self)
         self._loading_ui = False
@@ -646,18 +647,85 @@ class ServerTab(QWidget):
             self.mmproj.setText(mmproj)
 
     def refresh_model_names(self) -> None:
+        """내 모델 목록이 바뀌면(받기 완료·삭제·이름 바꾸기) 호출된다."""
+        self._drop_missing_model()
         self._refresh_model_combo()
 
+    def _drop_missing_model(self) -> None:
+        """선택해 둔 모델 파일이 지워졌으면 선택을 비운다 (실행 중이면 그대로 둔다)."""
+        cur = self.model_path
+        if not cur or Path(cur).exists() or self.controller.is_active:
+            return
+        self.model_info = None
+        self.model_dir = None
+        self.mmproj.setText("")
+        self._on_option_changed()
+        self._on_state(self.controller.state)
+
+    def combo_entries(self) -> list[tuple[str, str, str]]:
+        """서버 탭 모델 목록: (구역, 경로, 표시 글자). 최근 사용한 모델 → 내 모델 탭의 나머지 모델 순.
+        지금 엔진이 실행할 수 없는 형식(GGUF ↔ MLX 폴더 등)은 뺀다."""
+        from ..core.model_library import Source, engine_accepts
+        formats = self.launcher.formats
+        want_dir = self.launcher.model_is_dir
+        lib_models = {str(m.path): m for m in self.library()}
+        out: list[tuple[str, str, str]] = []
+        seen: set[str] = set()
+
+        def label(path: str) -> str:
+            m = lib_models.get(path)
+            bits = [self.name_for(path)]
+            if m:
+                if m.quant:
+                    bits.append(m.quant)
+                if m.size:
+                    bits.append(format_bytes(m.size))
+                if m.source != Source.DOWNLOAD:
+                    bits.append(Source.LABELS.get(m.source, ""))
+                if m.is_embedding:
+                    bits.append("📚 임베딩")
+            return "  ·  ".join(b for b in bits if b)
+
+        for p in self.settings.recent_models:
+            m = lib_models.get(p)
+            ok = engine_accepts(formats, m) if m else (Path(p).exists() and Path(p).is_dir() == want_dir)
+            if ok and p not in seen:
+                out.append(("recent", p, label(p)))
+                seen.add(p)
+        rest = [m for m in lib_models.values() if str(m.path) not in seen and engine_accepts(formats, m)]
+        rest.sort(key=lambda m: (m.source != Source.DOWNLOAD, m.is_embedding, self.name_for(str(m.path)).lower()))
+        for m in rest:
+            out.append(("library", str(m.path), label(str(m.path))))
+        return out
+
+    def _empty_hint(self, what: str) -> str:
+        n = sum(1 for i in range(self.model_combo.count()) if self.model_combo.itemData(i))
+        if n:
+            return f"선택한 모델이 없어요. 위 목록에서 내 모델 {n}개 중 하나를 고르거나 [📂 파일 선택…]으로 {what}을 골라 주세요."
+        return f"선택한 모델이 없어요. [🔍 모델 찾기] 탭에서 받거나 [📂 파일 선택…]으로 {what}을 골라 주세요."
+
     def _refresh_model_combo(self) -> None:
+        self.model_combo.blockSignals(True)
         self.model_combo.clear()
         want_dir = self.launcher.model_is_dir
-        self.model_combo.setPlaceholderText("모델 폴더를 선택해 주세요" if want_dir else "모델 파일을 선택해 주세요 (.gguf)")
-        for p in self.settings.recent_models:
-            if Path(p).exists() and Path(p).is_dir() == want_dir:
-                self.model_combo.addItem(self.name_for(p), p)
-                self.model_combo.setItemData(self.model_combo.count() - 1, p, Qt.ToolTipRole)
-        if self.model_path:
-            self.model_combo.setCurrentIndex(self.model_combo.findData(self.model_path))
+        entries = self.combo_entries()
+        if entries:
+            self.model_combo.setPlaceholderText("모델을 골라 주세요")
+        else:
+            self.model_combo.setPlaceholderText("모델 폴더를 선택해 주세요" if want_dir else
+                                                "모델이 없어요 — [🔍 모델 찾기]에서 받거나 파일을 선택해 주세요")
+        section = None
+        for sec, p, text in entries:
+            if sec != section:
+                if section is not None:
+                    self.model_combo.insertSeparator(self.model_combo.count())
+                section = sec
+            self.model_combo.addItem(text, p)
+            self.model_combo.setItemData(self.model_combo.count() - 1, p, Qt.ToolTipRole)
+        self.model_combo.setCurrentIndex(self.model_combo.findData(self.model_path) if self.model_path else -1)
+        self.model_combo.blockSignals(False)
+        if not self.model_path:
+            self._update_fit_label()
 
     def _select_model(self, path: Optional[str], auto_configure: bool = True) -> None:
         if not path:
@@ -705,7 +773,7 @@ class ServerTab(QWidget):
         i = self.model_info
         if self.launcher.model_is_dir:
             if not self.model_dir:
-                self.model_lbl.setText("선택한 모델이 없어요. [📂 파일 선택…]으로 모델 폴더를 골라 주세요.")
+                self.model_lbl.setText(self._empty_hint("모델 폴더"))
                 return
             size = sum(f.stat().st_size for f in Path(self.model_dir).rglob("*") if f.is_file())
             text = f"<b>{html.escape(Path(self.model_dir).name)}</b> · 폴더 · {format_bytes(size)}"
@@ -715,7 +783,7 @@ class ServerTab(QWidget):
             self.model_lbl.setText(text)
             return
         if not i:
-            self.model_lbl.setText("선택한 모델이 없어요. [📂 파일 선택…]으로 .gguf 파일을 골라 주세요.")
+            self.model_lbl.setText(self._empty_hint(".gguf 파일"))
             return
         parts = [f"<b>{html.escape(self.name_for(str(i.path)))}</b>"]
         if i.size_label:

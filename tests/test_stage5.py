@@ -369,7 +369,7 @@ def test_library_finds_folder_models(tmp_path):
     assert q.dir_meta["ctx"] == 40960 and q.size > 1000 and q.source == lib.Source.DOWNLOAD
     assert models["Qwen3-8B-AWQ"].fmt == "safetensors"
     hf = models["SmolLM2-135M-4bit"]
-    assert hf.source == lib.Source.HFCACHE and hf.path == snap and not hf.deletable
+    assert hf.source == lib.Source.HFCACHE and hf.path == snap and hf.deletable
     assert models["Gemma-MLX-8bit"].source == lib.Source.LMSTUDIO
 
 

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import html
+import shutil
 import sys
 from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QFileDialog, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
     QMenu, QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout,
@@ -120,7 +121,7 @@ class ModelsTab(QWidget):
         self.table = QTableWidget(0, len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.setSortingEnabled(True)
@@ -133,6 +134,12 @@ class ModelsTab(QWidget):
         self.table.itemSelectionChanged.connect(self._on_select)
         self.table.doubleClicked.connect(lambda *_: self._run())
         lv.addWidget(self.table)
+        for key in (QKeySequence.Delete, QKeySequence(Qt.Key_Backspace)):
+            sc = QShortcut(key, self.table, context=Qt.WidgetShortcut)
+            sc.activated.connect(self._delete)
+        self.usage_lbl = QLabel()
+        self.usage_lbl.setObjectName("hint")
+        lv.addWidget(self.usage_lbl)
         self.empty_lbl = QLabel("아직 모델이 없어요.\n[🔍 모델 찾기] 탭에서 받거나 [📄 파일 직접 선택…]으로 추가해 보세요.")
         self.empty_lbl.setAlignment(Qt.AlignCenter)
         self.empty_lbl.setObjectName("hint")
@@ -159,7 +166,7 @@ class ModelsTab(QWidget):
         self.forget_btn = QPushButton("➖ 목록에서 빼기")
         self.forget_btn.setToolTip("파일은 지우지 않고 목록에서만 빼요.")
         self.forget_btn.clicked.connect(self._forget)
-        self.delete_btn = QPushButton("🗑 삭제")
+        self.delete_btn = QPushButton("🗑 파일 삭제")
         self.delete_btn.clicked.connect(self._delete)
         for b in (self.run_btn, self.reveal_btn, self.rename_btn, self.forget_btn, self.delete_btn):
             rv.addWidget(b)
@@ -241,7 +248,7 @@ class ModelsTab(QWidget):
         return assess_fit(self.system, spec, FIT_CTX)
 
     def _fill_table(self) -> None:
-        selected = self._selected_key()
+        selected = [m.key for m in self.selected_models()]
         self.table.setSortingEnabled(False)
         self.table.blockSignals(True)
         self.table.setRowCount(0)
@@ -291,7 +298,8 @@ class ModelsTab(QWidget):
         self.empty_lbl.setVisible(not self.models and not self._loading)
         self.table.setVisible(bool(self.models) or self._loading)
         self._apply_filter()
-        self._select_key(selected)
+        self._select_keys(selected)
+        self._update_usage()
         self._on_select()
 
     def _apply_filter(self) -> None:
@@ -307,22 +315,58 @@ class ModelsTab(QWidget):
             return None
         return self.table.item(rows[0].row(), 0).data(Qt.UserRole + 1)
 
-    def _select_key(self, key: Optional[str]) -> None:
-        if not key:
+    def _select_keys(self, keys: list[str]) -> None:
+        if not keys:
             return
+        from PySide6.QtCore import QItemSelection, QItemSelectionModel
+        sel = QItemSelection()
         for r in range(self.table.rowCount()):
-            if self.table.item(r, 0).data(Qt.UserRole + 1) == key:
-                self.table.blockSignals(True)
-                self.table.selectRow(r)
-                self.table.blockSignals(False)
-                return
+            if self.table.item(r, 0).data(Qt.UserRole + 1) in keys:
+                sel.select(self.table.model().index(r, 0), self.table.model().index(r, self.table.columnCount() - 1))
+        self.table.blockSignals(True)
+        self.table.selectionModel().select(sel, QItemSelectionModel.ClearAndSelect)
+        self.table.blockSignals(False)
 
     def current(self) -> Optional[lib.LocalModel]:
         key = self._selected_key()
         return self._find(key) if key else None
 
+    def selected_models(self) -> list[lib.LocalModel]:
+        out = []
+        for idx in self.table.selectionModel().selectedRows():
+            m = self._find(self.table.item(idx.row(), 0).data(Qt.UserRole + 1))
+            if m:
+                out.append(m)
+        return out
+
+    def _update_usage(self) -> None:
+        if not self.models:
+            self.usage_lbl.setText("")
+            return
+        mine = [m for m in self.models if m.source in (lib.Source.DOWNLOAD,)]
+        total = sum(m.size for m in self.models)
+        text = f"모델 {len(self.models)}개 · 모두 {format_bytes(total)}"
+        if mine:
+            text += f" (라마런처로 받은 모델 {format_bytes(sum(m.size for m in mine))})"
+        try:
+            free = shutil.disk_usage(self.settings.models_dir).free
+            text += f" · 모델 폴더 디스크 남은 공간 {format_bytes(free)}"
+        except OSError:
+            pass
+        self.usage_lbl.setText(text + "  —  여러 개를 골라(⌘/Ctrl·Shift+클릭) 한 번에 지울 수 있어요.")
+
     # ------------------------------------------------------------------ 상세 정보
     def _on_select(self) -> None:
+        sel = self.selected_models()
+        if len(sel) > 1:
+            self._update_buttons(None)
+            n_del = sum(1 for m in sel if m.deletable)
+            self.delete_btn.setEnabled(n_del > 0)
+            self.delete_btn.setText(f"🗑 {n_del}개 파일 삭제")
+            self.detail.setText(f"<b>{len(sel)}개 모델을 골랐어요</b><br>모두 {format_bytes(sum(m.size for m in sel))}<br><br>"
+                                "[🗑 파일 삭제]를 누르면 한 번에 지워요.")
+            return
+        self.delete_btn.setText("🗑 파일 삭제")
         m = self.current()
         self._update_buttons(m)
         if not m:
@@ -390,11 +434,7 @@ class ModelsTab(QWidget):
         self.rename_btn.setEnabled(has)
         self.forget_btn.setVisible(has and m.source in (lib.Source.ADDED, lib.Source.FOLDER))
         self.delete_btn.setEnabled(has and m.deletable)
-        tip = ""
-        if has and not m.deletable:
-            tip = ("Ollama 모델은 Ollama에서 지워 주세요 (ollama rm 이름)." if m.source == lib.Source.OLLAMA
-                   else "허깅페이스 캐시는 터미널에서 'hf cache delete'로 정리해 주세요.")
-        self.delete_btn.setToolTip(tip)
+        self.delete_btn.setToolTip("모델 파일을 디스크에서 완전히 지워요 (휴지통에 남지 않아요). 단축키: Delete")
 
     # ------------------------------------------------------------------ 동작
     def add_file(self, path: str, quiet: bool = True) -> None:
@@ -509,41 +549,67 @@ class ModelsTab(QWidget):
         self.refresh()
 
     def _delete(self) -> None:
-        m = self.current()
-        if not m or not m.deletable:
+        targets = [m for m in self.selected_models() if m.deletable]
+        if not targets:
             return
-        if self.in_use(str(m.path)):
-            QMessageBox.warning(self, "사용 중인 모델", "지금 서버에서 실행 중인 모델이에요. 서버를 먼저 중지해 주세요.")
+        busy = [m for m in targets if self.in_use(str(m.path))]
+        if busy:
+            QMessageBox.warning(self, "사용 중인 모델",
+                                f"'{self.display_name_for(str(busy[0].path))}'은(는) 지금 서버에서 실행 중이에요. "
+                                "서버를 먼저 중지해 주세요.")
             return
-        files = lib.files_of(m, self.models)
-        total = sum(f.stat().st_size for f in files if f.exists())
-        warn = ""
-        if m.source == lib.Source.LMSTUDIO:
-            warn = "\n\n⚠️ LM Studio에서 받은 모델이에요. LM Studio에서도 사라져요."
-        elif m.source in (lib.Source.ADDED, lib.Source.FOLDER):
-            warn = "\n\n⚠️ 직접 추가한 파일이에요. 원본 파일이 지워져요."
-        answer = QMessageBox.warning(
-            self, "모델 삭제", f"다음 파일을 완전히 지울까요? ({format_bytes(total)} 확보)\n\n" +
-            "\n".join(f"• {f.name}" for f in files) + warn,
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if answer != QMessageBox.Yes:
+        plan = [(m, lib.files_of(m, [o for o in self.models if o not in targets])) for m in targets]
+        total = lib.size_on_disk([f for _, fs in plan for f in fs])
+        lines, warns = [], set()
+        for m, fs in plan:
+            name = self.display_name_for(str(m.path))
+            lines.append(f"• {name}" + (f"  ({len(fs)}개 파일)" if len(fs) > 1 else ""))
+            if m.source == lib.Source.LMSTUDIO:
+                warns.add("LM Studio에서 받은 모델은 LM Studio에서도 사라져요.")
+            elif m.source in (lib.Source.ADDED, lib.Source.FOLDER):
+                warns.add("직접 추가한 파일은 원본 파일이 지워져요.")
+            elif m.source == lib.Source.OLLAMA:
+                warns.add("Ollama 모델은 Ollama에서도 사라져요 (다른 모델과 같이 쓰는 파일은 남겨요).")
+            elif m.source == lib.Source.HFCACHE:
+                warns.add("허깅페이스 캐시의 이 저장소 폴더가 통째로 지워져요.")
+        if len(lines) > 12:
+            lines = lines[:12] + [f"… 외 {len(lines) - 12}개"]
+        msg = (f"{len(targets)}개 모델을 디스크에서 완전히 지울까요? ({format_bytes(total)} 확보)\n"
+               "휴지통에 남지 않아 되돌릴 수 없어요.\n\n" + "\n".join(lines))
+        if warns:
+            msg += "\n\n" + "\n".join(f"⚠️ {w}" for w in sorted(warns))
+        if QMessageBox.warning(self, "모델 파일 삭제", msg, QMessageBox.Yes | QMessageBox.No,
+                               QMessageBox.No) != QMessageBox.Yes:
             return
-        try:
-            lib.delete_model(m, Path(self.settings.models_dir), self.models)
-        except OSError as e:
-            QMessageBox.warning(self, "삭제 실패", f"파일을 지우지 못했어요: {e}")
-        p = str(m.path)
+        failed = []
+        remaining = list(self.models)
+        for m, _ in plan:
+            try:
+                lib.delete_model(m, Path(self.settings.models_dir), [o for o in remaining if o is not m])
+                remaining.remove(m)
+            except OSError as e:
+                failed.append(f"{self.display_name_for(str(m.path))}: {e}")
+                continue
+            self._forget_paths(str(m.path))
+        self.save_settings()
+        self.models = remaining
+        self._fill_table()
+        self.models_changed.emit()
+        if failed:
+            QMessageBox.warning(self, "일부 삭제 실패", "다음 모델을 지우지 못했어요:\n\n" + "\n".join(failed))
+        self.refresh()
+
+    def _forget_paths(self, p: str) -> None:
+        """지운 모델을 설정(직접 추가 목록, 이름, 최근 사용)에서도 뺀다."""
         if p in self.settings.added_models:
             self.settings.added_models.remove(p)
         self.settings.model_names.pop(p, None)
         self.settings.recent_models = [x for x in self.settings.recent_models if x != p]
         if self.settings.last_model == p:
             self.settings.last_model = ""
-        self.save_settings()
-        self.refresh()
 
     def _context_menu(self, pos) -> None:
-        if not self.current():
+        if not self.selected_models():
             return
         menu = QMenu(self)
         for btn in (self.run_btn, self.reveal_btn, self.rename_btn, self.forget_btn, self.delete_btn):
