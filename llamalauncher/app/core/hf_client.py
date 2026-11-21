@@ -236,7 +236,9 @@ def parse_tree(repo: str, entries: list[dict]) -> RepoFiles:
         if "mmproj" in low:
             mmproj.append(QuantFile(_quant_of(path), [path], size, [sha], [size]))
             continue
-        if "imatrix" in low or low.startswith("mtp-") or "/mtp/" in path.lower() or path.lower().startswith("mtp/"):
+        # imatrix, 추측 디코딩용 보조(초안) 모델(mtp-, dflash-, eagle-, draft)은 일반 사용자가 받을 파일이 아니다
+        if "imatrix" in low or low.startswith(("mtp-", "dflash-", "eagle-", "eagle3-", "draft-")) or \
+                "-draft" in low or re.search(r"(^|/)(mtp|dflash|draft|eagle3?)/", path.lower()):
             other.append(path)
             continue
         m = SPLIT_RE.search(path)

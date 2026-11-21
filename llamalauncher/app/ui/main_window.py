@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QMainWindow, QMessageBox, QTabWidget
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices
+from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QMessageBox, QTabWidget
 
 from ..core.hf_client import HFClient, HFModel, QuantFile
 from ..core.recommender import Fit, ModelSpec, assess_fit
@@ -114,6 +115,52 @@ class MainWindow(QMainWindow):
             idx = self.tabs.addTab(placeholder, name)
             self.tabs.setTabEnabled(idx, False)
         self.setCentralWidget(self.tabs)
+        self._build_menu()
+
+    # ------------------------------------------------------------------ 메뉴
+    def _build_menu(self) -> None:
+        from .theme import THEMES
+        view = self.menuBar().addMenu("보기")
+        theme_menu = view.addMenu("테마")
+        group = QActionGroup(self)
+        for mode, label in THEMES:
+            a = QAction(label, self, checkable=True)
+            a.setChecked(self.settings.theme == mode)
+            a.triggered.connect(lambda _=False, m=mode: self.set_theme(m))
+            group.addAction(a)
+            theme_menu.addAction(a)
+        help_menu = self.menuBar().addMenu("도움말")
+        wiz = help_menu.addAction("시작 마법사…")
+        wiz.triggered.connect(self.show_wizard)
+        logs = help_menu.addAction("기록(로그) 폴더 열기")
+        logs.triggered.connect(self._open_logs)
+        about = help_menu.addAction("라마런처 정보")
+        about.triggered.connect(self._about)
+
+    def set_theme(self, mode: str) -> None:
+        from .theme import apply_theme
+        self.settings.theme = mode
+        self.save_settings()
+        apply_theme(QApplication.instance(), mode)
+        self.chat._render()
+
+    def show_wizard(self) -> None:
+        from .wizard import SetupWizard
+        SetupWizard(self).exec()
+
+    def _open_logs(self) -> None:
+        from ..core.settings import logs_dir
+        d = logs_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(d)))
+
+    def _about(self) -> None:
+        from .. import __version__
+        QMessageBox.about(self, "라마런처 정보",
+                          f"<h3>라마런처 (LlamaLauncher) {__version__}</h3>"
+                          "<p>내 컴퓨터에서 AI 모델을 쉽게 찾고, 받고, 실행하는 프로그램이에요.</p>"
+                          "<p>실행 엔진: llama.cpp · Ollama · LM Studio · KoboldCpp · MLX-LM · vLLM 등<br>"
+                          "모델: Hugging Face</p>")
 
     def save_settings(self) -> None:
         try:
