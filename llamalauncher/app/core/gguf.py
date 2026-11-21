@@ -22,6 +22,16 @@ _MAX_KEEP_ARRAY = 256  # 이보다 큰 배열은 값을 버린다 (어휘 목록
 SPLIT_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$", re.I)
 
 
+# general.file_type 값 → 양자화 이름 (llama.cpp의 llama_ftype)
+FILE_TYPES = {
+    0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1", 7: "Q8_0", 8: "Q5_0", 9: "Q5_1", 10: "Q2_K",
+    11: "Q3_K_S", 12: "Q3_K_M", 13: "Q3_K_L", 14: "Q4_K_S", 15: "Q4_K_M", 16: "Q5_K_S", 17: "Q5_K_M",
+    18: "Q6_K", 19: "IQ2_XXS", 20: "IQ2_XS", 21: "Q2_K_S", 22: "IQ3_XS", 23: "IQ3_XXS", 24: "IQ1_S",
+    25: "IQ4_NL", 26: "IQ3_S", 27: "IQ3_M", 28: "IQ2_S", 29: "IQ2_M", 30: "IQ4_XS", 31: "IQ1_M",
+    32: "BF16", 36: "TQ1_0", 37: "TQ2_0", 38: "MXFP4_MOE",
+}
+
+
 class GGUFError(ValueError):
     pass
 
@@ -116,6 +126,8 @@ class GGUFInfo:
     n_head_kv: Optional[int] = None
     head_dim: Optional[int] = None
     chat_template: str = ""
+    file_type: str = ""
+    n_params: Optional[int] = None
     missing_parts: list[Path] = field(default_factory=list)
 
     @property
@@ -157,6 +169,8 @@ def inspect(path: Path | str) -> GGUFInfo:
         n_head_kv=_int(g("attention.head_count_kv")),
         head_dim=_int(g("attention.key_length")),
         chat_template=str(meta.get("tokenizer.chat_template", "") or ""),
+        file_type=FILE_TYPES.get(meta.get("general.file_type"), "") if isinstance(meta.get("general.file_type"), int) else "",
+        n_params=_int(meta.get("general.parameter_count")),
         missing_parts=missing,
     )
     if info.head_dim is None and info.n_embd and info.n_head:

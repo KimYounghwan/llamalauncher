@@ -22,9 +22,16 @@ class _Task(QRunnable):
         try:
             result = self.fn()
         except Exception as e:  # noqa: BLE001 — 실패는 콜백으로 전달
-            self.signals.failed.emit(e)
+            self._emit(self.signals.failed, e)
         else:
-            self.signals.done.emit(result)
+            self._emit(self.signals.done, result)
+
+    @staticmethod
+    def _emit(signal, value):
+        try:
+            signal.emit(value)
+        except RuntimeError:
+            pass  # 작업이 끝나기 전에 앱이 종료됨
 
 
 _alive: set[_Task] = set()

@@ -37,6 +37,14 @@ class Settings:
     hf_hide_risky: bool = True
     hf_trusted_only: bool = False
     max_downloads: int = 2
+    # 내 모델
+    added_models: list[str] = field(default_factory=list)     # [파일 직접 선택]으로 추가한 파일
+    model_folders: list[str] = field(default_factory=list)    # 스캔해서 가져온 폴더
+    model_names: dict[str, str] = field(default_factory=dict)  # 경로 → 사용자가 바꾼 표시 이름
+    show_external_models: bool = True                          # LM Studio·Ollama 모델도 보기
+    # 채팅 테스트
+    chat_system_prompt: str = "당신은 친절한 도우미입니다. 한국어로 간결하게 답하세요."
+    chat_show_reasoning: bool = True
 
     MAX_RECENT = 15
 

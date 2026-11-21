@@ -6,7 +6,7 @@ import html
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFont, QGuiApplication
@@ -69,6 +69,7 @@ def _tip_label(text: str, tip: str) -> QLabel:
 
 class ServerTab(QWidget):
     server_state_changed = Signal(object)
+    model_file_picked = Signal(str)  # [파일 선택…]으로 직접 고른 모델 (내 모델 목록에 추가용)
 
     def __init__(self, settings: Settings, save_settings):
         super().__init__()
@@ -78,6 +79,10 @@ class ServerTab(QWidget):
         self.launcher = LlamaCppLauncher()
         self.launcher_status: Optional[LauncherStatus] = None
         self.model_info: Optional[gguf.GGUFInfo] = None
+        # 내 모델 탭이 채워 주는 도우미 (표시 이름, Ollama처럼 같은 폴더에 없는 비전 파일)
+        self.name_for: Callable[[str], str] = lambda p: Path(p).name
+        self.mmproj_for: Callable[[str], Optional[str]] = lambda p: None
+        self.running: dict = {}  # 실행 중인 서버 정보 (채팅 탭에서 사용)
         self.controller = ServerController(self)
         self._loading_ui = False
         self._log_file = None
@@ -111,8 +116,10 @@ class ServerTab(QWidget):
         QTimer.singleShot(500, self._check_orphan)
 
     def _check_orphan(self) -> None:
+        if self.controller.is_active:
+            return  # 이미 이 창에서 서버를 켰다면 PID 파일은 지금 서버의 것이다
         proc = find_orphan_server()
-        if proc is None:
+        if proc is None or proc.pid == self.controller.pid:
             return
         answer = QMessageBox.question(
             self, "이전 서버가 남아 있어요",
@@ -549,6 +556,7 @@ class ServerTab(QWidget):
                                                                          else start), "GGUF 모델 (*.gguf)")
         if path:
             self._select_model(path)
+            self.model_file_picked.emit(path)
 
     def _pick_mmproj(self) -> None:
         start = str(self.model_info.path.parent) if self.model_info else self.settings.models_dir
@@ -556,15 +564,23 @@ class ServerTab(QWidget):
         if path:
             self.mmproj.setText(path)
 
-    def select_model_path(self, path: str) -> None:
-        """다른 탭(다운로드 등)에서 모델을 넘겨받을 때 사용."""
+    def select_model_path(self, path: str, mmproj: Optional[str] = None) -> None:
+        """다른 탭(다운로드, 내 모델)에서 모델을 넘겨받을 때 사용."""
         self._select_model(path)
+        if mmproj and self.model_info and str(self.model_info.path) == str(Path(path)):
+            self.mmproj.setText(mmproj)
+
+    def refresh_model_names(self) -> None:
+        cur = self.model_combo.currentData()
+        self._refresh_model_combo()
+        if cur:
+            self.model_combo.setCurrentIndex(self.model_combo.findData(cur))
 
     def _refresh_model_combo(self) -> None:
         self.model_combo.clear()
         for p in self.settings.recent_models:
             if Path(p).exists():
-                self.model_combo.addItem(Path(p).name, p)
+                self.model_combo.addItem(self.name_for(p), p)
                 self.model_combo.setItemData(self.model_combo.count() - 1, p, Qt.ToolTipRole)
 
     def _select_model(self, path: Optional[str], auto_configure: bool = True) -> None:
@@ -579,7 +595,7 @@ class ServerTab(QWidget):
             QMessageBox.warning(self, "분할 파일 누락", "이 모델은 여러 조각으로 나뉘어 있는데 일부가 없어요:\n" +
                                 "\n".join(p.name for p in info.missing_parts))
         self.model_info = info
-        mm = gguf.find_mmproj(info.path)
+        mm = gguf.find_mmproj(info.path) or self.mmproj_for(str(info.path))
         self.mmproj.setText(str(mm) if mm else "")
         self.settings.add_recent_model(str(info.path))
         self.save_settings()
@@ -595,7 +611,7 @@ class ServerTab(QWidget):
         if not i:
             self.model_lbl.setText("선택한 모델이 없어요. [📂 파일 선택…]으로 .gguf 파일을 골라 주세요.")
             return
-        parts = [f"<b>{html.escape(i.display_name)}</b>"]
+        parts = [f"<b>{html.escape(self.name_for(str(i.path)))}</b>"]
         if i.size_label:
             parts.append(i.size_label)
         if i.architecture:
@@ -699,6 +715,9 @@ class ServerTab(QWidget):
         self.prompt_lbl.setText("입력 처리 속도: —")
         self._open_log_file()
         self._append_log("$ " + format_command([str(st.path), *args], api_key=o.api_key), "info")
+        self.running = {"api_key": o.api_key, "alias": o.alias or "local-model",
+                        "model_path": str(self.model_info.path), "vision": bool(o.mmproj),
+                        "model_name": self.name_for(str(self.model_info.path)), "ctx_size": o.ctx_size}
         self.controller.start(str(st.path), args, o.host, o.port)
 
     def restart_server(self) -> None:

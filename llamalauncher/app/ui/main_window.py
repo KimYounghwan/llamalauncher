@@ -14,11 +14,13 @@ from ..core.secrets_store import get_hf_token
 from ..core.server import ServerState
 from ..core.settings import Settings
 from .browse_tab import BrowseTab
+from .chat_tab import ChatTab
 from .dashboard import DashboardTab
 from .downloads_tab import DownloadsTab
+from .models_tab import ModelsTab
 from .server_tab import ServerTab
 
-UPCOMING_TABS = [("🚀 런처", 5), ("📁 내 모델", 4), ("💬 채팅 테스트", 4), ("🔌 연동", 6)]
+UPCOMING_TABS = [("🚀 런처", 5), ("🔌 연동", 6)]
 
 STYLE = """
 QLabel#pageTitle { font-size: 22px; font-weight: 700; }
@@ -63,19 +65,32 @@ class MainWindow(QMainWindow):
         self.dashboard = DashboardTab(Path(settings.models_dir))
         self.browse = BrowseTab(settings, self.hf, self.save_settings)
         self.downloads = DownloadsTab(settings, self.save_settings)
+        self.models = ModelsTab(settings, self.save_settings)
         self.server = ServerTab(settings, self.save_settings)
+        self.chat = ChatTab(settings, self.save_settings)
+        self.server.name_for = self.models.display_name_for
+        self.server.mmproj_for = self.models.mmproj_for
+        self.models.in_use = lambda p: self.server.controller.is_active and self.server.running.get("model_path") == p
         self.dashboard.system_detected.connect(self.server.set_system)
         self.dashboard.system_detected.connect(self.browse.set_system)
+        self.dashboard.system_detected.connect(self.models.set_system)
         self.server.server_state_changed.connect(self._on_server_state)
+        self.server.model_file_picked.connect(self.models.add_file)
+        self.models.run_model.connect(self._run_model)
+        self.models.models_changed.connect(self.server.refresh_model_names)
+        self.chat.go_to_server.connect(lambda: self.tabs.setCurrentIndex(self.server_index))
         self.browse.download_requested.connect(self._on_download_requested)
         self.downloads.run_model.connect(self._run_model)
         self.downloads.active_count_changed.connect(self._on_downloads_count)
+        self.downloads.active_count_changed.connect(lambda _n: self.models.refresh_later())
         self.downloads.token_changed.connect(lambda tok: setattr(self.hf, "token", tok))
 
         self.tabs.addTab(self.dashboard, "📊 대시보드")
         self.tabs.addTab(self.browse, "🔍 모델 찾기")
         self.downloads_index = self.tabs.addTab(self.downloads, "⬇️ 다운로드")
+        self.models_index = self.tabs.addTab(self.models, "📁 내 모델")
         self.server_index = self.tabs.addTab(self.server, "▶️ 서버")
+        self.chat_index = self.tabs.addTab(self.chat, "💬 채팅 테스트")
         for name, stage in UPCOMING_TABS:
             placeholder = QLabel(f"{name.split(' ', 1)[1]} 기능은 {stage}단계에서 추가될 예정이에요.")
             placeholder.setAlignment(Qt.AlignCenter)
@@ -92,6 +107,7 @@ class MainWindow(QMainWindow):
     def _on_server_state(self, state: ServerState) -> None:
         mark = {ServerState.RUNNING: " 🟢", ServerState.STARTING: " 🟡", ServerState.ERROR: " 🔴"}.get(state, "")
         self.tabs.setTabText(self.server_index, "▶️ 서버" + mark)
+        self.chat.set_server(state, self.server.controller.base_url, self.server.running)
 
     def _on_download_requested(self, model: HFModel, quant: QuantFile, mmproj) -> None:
         system = self.dashboard.system
@@ -110,8 +126,14 @@ class MainWindow(QMainWindow):
     def _on_downloads_count(self, n: int) -> None:
         self.tabs.setTabText(self.downloads_index, "⬇️ 다운로드" + (f" ({n})" if n else ""))
 
-    def _run_model(self, path: str) -> None:
-        self.server.select_model_path(path)
+    def _run_model(self, path: str, mmproj=None) -> None:
+        if self.server.controller.is_active and self.server.running.get("model_path") != path:
+            if QMessageBox.question(self, "다른 모델이 실행 중이에요",
+                                    "지금 실행 중인 서버를 멈추고 이 모델로 바꿀까요?\n"
+                                    "(바꾼 뒤 [서버] 탭에서 ▶ 서버 시작을 눌러 주세요)") != QMessageBox.Yes:
+                return
+            self.server.controller.stop()
+        self.server.select_model_path(path, mmproj)
         self.tabs.setCurrentIndex(self.server_index)
 
     def closeEvent(self, event):
@@ -125,6 +147,7 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
+        self.chat.shutdown()
         self.downloads.shutdown()
         self.server.shutdown()
         self.save_settings()
