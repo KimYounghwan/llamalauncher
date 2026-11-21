@@ -282,7 +282,8 @@ class ModelsTab(QWidget):
                 fit_item.setToolTip(fit.reason)
             src_item = _SortItem(lib.Source.LABELS.get(m.source, m.source))
             src_item.setData(Qt.UserRole, m.source)
-            for c, it in enumerate([name_item, QTableWidgetItem(m.quant or "—"), size_item, src_item,
+            qtext = (m.quant or "—") + {"mlx": " · MLX", "safetensors": " · safetensors"}.get(m.fmt, "")
+            for c, it in enumerate([name_item, QTableWidgetItem(qtext), size_item, src_item,
                                     date_item, fit_item]):
                 self.table.setItem(r, c, it)
         self.table.setSortingEnabled(True)
@@ -343,6 +344,15 @@ class ModelsTab(QWidget):
             params = info.size_label or (f"{info.n_params / 1e9:.1f}B" if info.n_params else "")
             if params:
                 kv.append(("크기(파라미터)", e(params)))
+        if m.is_dir:
+            kv.append(("형식", "MLX (Apple Silicon 전용, MLX-LM으로 실행)" if m.fmt == "mlx"
+                       else "safetensors (vLLM으로 실행)"))
+            if m.dir_meta.get("model_type"):
+                kv.append(("구조(아키텍처)", e(str(m.dir_meta["model_type"]))))
+            if m.dir_meta.get("ctx"):
+                kv.append(("최대 문맥 길이", f"{int(m.dir_meta['ctx']):,} 토큰"))
+            if m.dir_meta.get("layers"):
+                kv.append(("레이어 수", str(m.dir_meta["layers"])))
         kv.append(("양자화", e(m.quant or "알 수 없음")))
         kv.append(("파일 크기", format_bytes(m.size) if m.size else "—"))
         if info:
@@ -380,7 +390,11 @@ class ModelsTab(QWidget):
         self.rename_btn.setEnabled(has)
         self.forget_btn.setVisible(has and m.source in (lib.Source.ADDED, lib.Source.FOLDER))
         self.delete_btn.setEnabled(has and m.deletable)
-        self.delete_btn.setToolTip("" if not has or m.deletable else "Ollama 모델은 Ollama에서 지워 주세요 (ollama rm 이름).")
+        tip = ""
+        if has and not m.deletable:
+            tip = ("Ollama 모델은 Ollama에서 지워 주세요 (ollama rm 이름)." if m.source == lib.Source.OLLAMA
+                   else "허깅페이스 캐시는 터미널에서 'hf cache delete'로 정리해 주세요.")
+        self.delete_btn.setToolTip(tip)
 
     # ------------------------------------------------------------------ 동작
     def add_file(self, path: str, quiet: bool = True) -> None:

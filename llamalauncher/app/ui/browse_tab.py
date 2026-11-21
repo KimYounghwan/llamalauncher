@@ -50,6 +50,7 @@ class _SortItem(QTableWidgetItem):
 
 class BrowseTab(QWidget):
     download_requested = Signal(object, object, object)   # (HFModel, QuantFile, Optional[QuantFile] mmproj)
+    ollama_pull_requested = Signal(str, str)              # (저장소, 양자화) → ollama pull hf.co/저장소:양자화
 
     def __init__(self, settings: Settings, client: HFClient, save_settings):
         super().__init__()
@@ -63,6 +64,8 @@ class BrowseTab(QWidget):
         self.files: Optional[RepoFiles] = None
         self._search_seq = 0
         self._detail_seq = 0
+        self.fmt = settings.hf_format or "gguf"
+        self.ollama_available = False
 
         root = QHBoxLayout(self)
         split = QSplitter(Qt.Horizontal)
@@ -101,10 +104,38 @@ class BrowseTab(QWidget):
         for cb in (self.trusted_cb, self.risky_cb):
             cb.toggled.connect(self._on_filter_changed)
             lay.addWidget(cb)
-        fmt = QLabel("형식: GGUF (llama.cpp용)")
-        fmt.setObjectName("hint")
-        lay.addWidget(fmt)
+        lay.addWidget(QLabel("<b>모델 형식</b>"))
+        self.fmt_combo = QComboBox()
+        self.fmt_combo.setToolTip("쓰려는 실행 엔진에 맞는 형식을 고르세요. 잘 모르면 GGUF예요.")
+        self.fmt_combo.activated.connect(lambda i: self.set_format(self.fmt_combo.itemData(i)))
+        lay.addWidget(self.fmt_combo)
+        self.set_format_options([("gguf", "GGUF — llama.cpp·Ollama·LM Studio 등")])
         return w
+
+    def set_format_options(self, options: list[tuple[str, str]]) -> None:
+        """런처 설치 상태에 따라 고를 수 있는 형식 목록을 바꾼다."""
+        self.fmt_combo.blockSignals(True)
+        self.fmt_combo.clear()
+        for fmt, label in options:
+            self.fmt_combo.addItem(label, fmt)
+        idx = self.fmt_combo.findData(self.fmt)
+        if idx < 0:
+            self.fmt = "gguf"
+            idx = 0
+        self.fmt_combo.setCurrentIndex(idx)
+        self.fmt_combo.blockSignals(False)
+
+    def set_format(self, fmt: str) -> None:
+        idx = self.fmt_combo.findData(fmt)
+        if idx < 0:
+            return
+        self.fmt_combo.setCurrentIndex(idx)
+        if fmt == self.fmt:
+            return
+        self.fmt = fmt
+        self.settings.hf_format = fmt
+        self.save_settings()
+        self.search()
 
     def _build_results(self) -> QWidget:
         w = QWidget()
@@ -204,6 +235,11 @@ class BrowseTab(QWidget):
         self.rec_btn.clicked.connect(self._download_recommended)
         self.dl_btn = QPushButton("⬇ 선택한 파일 받기")
         self.dl_btn.clicked.connect(self._download_selected)
+        self.ollama_btn = QPushButton("🦙 Ollama로 받기")
+        self.ollama_btn.setToolTip("선택한 파일을 Ollama에 바로 받아요 (ollama pull hf.co/…). Ollama 앱·연동 도구에서 바로 쓸 수 있어요.")
+        self.ollama_btn.clicked.connect(self._ollama_pull)
+        self.ollama_btn.hide()
+        btns.addWidget(self.ollama_btn)
         self.page_btn = QPushButton("허깅페이스에서 보기")
         self.page_btn.clicked.connect(lambda: self.current and QDesktopServices.openUrl(QUrl(self.current.url)))
         for b in (self.rec_btn, self.dl_btn, self.page_btn):
@@ -239,7 +275,7 @@ class BrowseTab(QWidget):
         seq = self._search_seq
         self.status_lbl.setText("허깅페이스에서 찾는 중…")
         system = self.system
-        kwargs = dict(category=cat_id, text=text, system=system, hide_risky=self.risky_cb.isChecked(),
+        kwargs = dict(category=cat_id, text=text, fmt=self.fmt, system=system, hide_risky=self.risky_cb.isChecked(),
                       trusted_only=self.trusted_cb.isChecked(), sort=self.sort_combo.currentData(),
                       use_cache=use_cache)
         run_in_background(lambda: self.client.search(**kwargs),
@@ -260,7 +296,7 @@ class BrowseTab(QWidget):
         self.models = models
         self.table.setRowCount(len(models))
         for row, m in enumerate(models):
-            fit = model_fit(m, self.system)
+            fit = model_fit(m, self.system, self.fmt)
             trusted = self.catalog.is_trusted(m.author)
             icons = ("🛠" if m.supports_tools else "") + ("👁" if m.is_vision else "") + ("🔒" if m.gated else "")
             name = QTableWidgetItem(f"{m.name}  {icons}".rstrip())
@@ -343,7 +379,8 @@ class BrowseTab(QWidget):
         self._detail_seq += 1
         seq = self._detail_seq
         repo = m.id
-        run_in_background(lambda: self.client.list_files(repo),
+        fmt = self.fmt
+        run_in_background(lambda: self.client.list_files(repo, fmt=fmt),
                           lambda f: seq == self._detail_seq and self._show_files(f),
                           lambda e: seq == self._detail_seq and self._files_error(e))
         run_in_background(lambda: self.client.readme_summary(repo),
@@ -387,7 +424,10 @@ class BrowseTab(QWidget):
         if rec_row is not None:
             self.f_table.selectRow(rec_row)
         if not files.quants:
-            self.d_summary.append("\n⚠️ 이 저장소에는 받을 수 있는 GGUF 모델 파일이 없어요.")
+            what = {"gguf": "GGUF 모델 파일", "mlx": "MLX 모델", "safetensors": "safetensors 모델"}.get(self.fmt, "모델")
+            self.d_summary.append(f"\n⚠️ 이 저장소에는 받을 수 있는 {what}이 없어요.")
+        elif self.fmt != "gguf":
+            self.d_summary.append("\nℹ️ 이 형식은 저장소의 모델 폴더 전체(설정·토크나이저 포함)를 받아요.")
         self._update_download_btn()
 
     def _selected_quant(self) -> Optional[QuantFile]:
@@ -395,7 +435,17 @@ class BrowseTab(QWidget):
         return self.files.quants[rows[0].row()] if rows else None
 
     def _update_download_btn(self) -> None:
-        self.dl_btn.setEnabled(self._selected_quant() is not None)
+        q = self._selected_quant()
+        self.dl_btn.setEnabled(q is not None)
+        self.ollama_btn.setVisible(self.ollama_available and self.fmt == "gguf")
+        self.ollama_btn.setEnabled(q is not None and not q.is_split)
+        if q is not None and q.is_split:
+            self.ollama_btn.setToolTip("분할된 파일은 Ollama로 바로 받을 수 없어요.")
+
+    def _ollama_pull(self) -> None:
+        q = self._selected_quant()
+        if q and self.current:
+            self.ollama_pull_requested.emit(self.current.id, q.quant)
 
     def _mmproj_choice(self) -> Optional[QuantFile]:
         if self.files and self.files.mmproj and self.mmproj_cb.isChecked():

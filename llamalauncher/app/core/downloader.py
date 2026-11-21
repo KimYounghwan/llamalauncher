@@ -51,10 +51,11 @@ class FileSpec:
     path: str                   # 저장소 내 경로
     size: int
     sha256: Optional[str] = None
+    keep_path: bool = False     # 저장소 폴더 구조 그대로 저장 (MLX/safetensors 모델 폴더)
 
     @property
     def filename(self) -> str:
-        return Path(self.path).name
+        return self.path if self.keep_path else Path(self.path).name
 
 
 @dataclass
@@ -70,6 +71,7 @@ class DownloadItem:
     created: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     mmproj: Optional[str] = None  # 함께 받은 비전 파일 이름
     revision: str = "main"
+    kind: str = "gguf"            # gguf: 파일 하나(+조각) / mlx·safetensors: 저장소 폴더 전체
     # 실행 중에만 쓰는 값
     speed: float = 0.0
 
@@ -79,7 +81,9 @@ class DownloadItem:
 
     @property
     def main_path(self) -> Path:
-        """서버에 넘길 모델 파일 (분할이면 첫 조각)."""
+        """서버에 넘길 모델 파일 (분할이면 첫 조각). 폴더형 모델이면 폴더."""
+        if self.kind != "gguf":
+            return Path(self.dest_dir)
         model_files = [f for f in self.files if f.filename != self.mmproj]
         return Path(self.dest_dir) / (model_files or self.files)[0].filename
 
@@ -192,7 +196,7 @@ class DownloadManager:
 
     # ---------------------------------------------------------------- 공개 API
     def add(self, repo: str, quant: str, files: list[FileSpec], dest_dir: Path,
-            mmproj: Optional[str] = None) -> DownloadItem:
+            mmproj: Optional[str] = None, kind: str = "gguf") -> DownloadItem:
         with self._lock:
             for it in self.items.values():
                 if it.repo == repo and it.quant == quant and it.status not in (Status.CANCELED, Status.ERROR) \
@@ -200,7 +204,7 @@ class DownloadManager:
                     if it.status == Status.PAUSED:
                         self.resume(it.id)
                     return it
-        item = DownloadItem(repo=repo, quant=quant, files=files, dest_dir=str(dest_dir), mmproj=mmproj)
+        item = DownloadItem(repo=repo, quant=quant, files=files, dest_dir=str(dest_dir), mmproj=mmproj, kind=kind)
         item.downloaded = self._bytes_on_disk(item)
         need = item.total - item.downloaded
         free = free_space(Path(dest_dir))
@@ -345,6 +349,7 @@ class DownloadManager:
 
     def _download_file(self, session: requests.Session, item: DownloadItem, f: FileSpec, done_before: int) -> Status:
         final = Path(item.dest_dir) / f.filename
+        final.parent.mkdir(parents=True, exist_ok=True)
         part = final.with_name(final.name + ".part")
         if final.exists() and (not f.size or final.stat().st_size == f.size):
             item.downloaded = done_before + final.stat().st_size
@@ -469,7 +474,7 @@ def write_manifest_entry(item: DownloadItem) -> None:
     entries = [e for e in read_manifest(models_dir) if e.get("path") != str(item.main_path)]
     entries.append({
         "path": str(item.main_path), "repo": item.repo, "quant": item.quant, "size": item.total,
-        "files": [f.filename for f in item.files],
+        "files": [f.filename for f in item.files], "format": item.kind,
         "mmproj": str(Path(item.dest_dir) / item.mmproj) if item.mmproj else None,
         "downloaded_at": datetime.now().isoformat(timespec="seconds"),
     })

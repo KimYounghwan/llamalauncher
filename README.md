@@ -9,7 +9,7 @@ llama.cpp를 기본 엔진으로 사용하며 macOS와 Windows에서 동작합�
 - [x] 2단계: llama.cpp 런처 감지/실행 + 서버 탭 + 옵션/자동 설정 (+ GGUF 메타데이터 읽기)
 - [x] 3단계: 허깅페이스 모델 검색(카테고리·적합도·추천 파일) + 다운로드(이어받기·검증)
 - [x] 4단계: 내 모델(LM Studio·Ollama 모델 자동 탐지, 폴더 가져오기) + 파일 직접 선택 + 채팅 테스트(스트리밍)
-- [ ] 5단계: 다른 런처 어댑터 + 자동 설치
+- [x] 5단계: 런처 8종(llama.cpp·Ollama·LM Studio·KoboldCpp·MLX-LM·vLLM·Jan·text-generation-webui) 감지·자동 설치, 엔진별 서버 실행, 형식별(GGUF·MLX·safetensors) 모델 찾기
 - [ ] 6단계: 외부 개발 도구 연동
 - [ ] 7단계: 첫 실행 마법사, 빌드
 
@@ -43,7 +43,8 @@ llamalauncher/
   app/core/recommender.py    # 메모리 계산, 적합도(쾌적/느림/부족), llama-server 추천 옵션
   app/core/settings.py       # 설정 저장 (OS별 사용자 설정 폴더)
   app/core/gguf.py           # GGUF 헤더(층 수, 최대 문맥, 채팅 템플릿) 읽기
-  app/core/launchers/        # 런처 감지 (llamacpp.py: 경로 탐색, 버전, 지원 옵션 확인)
+  app/core/launchers/        # 런처 어댑터: 감지·설치 계획·서버 실행 방법 (llamacpp, ollama, others)
+  app/core/installer.py      # 설치 실행기 (brew/winget 명령, GitHub 배포 받기·압축 풀기, 전용 파이썬 환경 pip)
   app/core/server.py         # llama-server 실행/중지/상태 감시 (QProcess)
   app/core/server_log.py     # 로그 분류, 속도 추출, 오류를 쉬운 말로 설명
   app/core/netutil.py        # 포트 확인, 내 IP, API 키 생성

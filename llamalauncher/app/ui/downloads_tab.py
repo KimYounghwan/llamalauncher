@@ -108,14 +108,18 @@ class DownloadsTab(QWidget):
 
     # ------------------------------------------------------------------ 외부에서 호출
     def enqueue(self, model: HFModel, quant: QuantFile, mmproj: Optional[QuantFile]) -> Optional[DownloadItem]:
-        files = [FileSpec(p, s, h) for p, s, h in zip(quant.paths, quant.sizes or [quant.size], quant.sha256 or [None])]
+        keep = quant.kind != "gguf"
+        files = [FileSpec(p, s, h, keep_path=keep)
+                 for p, s, h in zip(quant.paths, quant.sizes or [quant.size], quant.sha256 or [None] * len(quant.paths))]
         mm_name = None
         if mmproj:
             files.append(FileSpec(mmproj.paths[0], mmproj.size, (mmproj.sha256 or [None])[0]))
             mm_name = Path(mmproj.paths[0]).name
         dest = repo_dir(Path(self.settings.models_dir), model.id)
+        if keep:  # 폴더형 모델은 형식별 하위 폴더에 (같은 저장소의 GGUF와 섞이지 않게)
+            dest = Path(self.settings.models_dir) / quant.kind / model.id.replace("/", "__")
         try:
-            item = self.manager.add(model.id, quant.quant, files, dest, mmproj=mm_name)
+            item = self.manager.add(model.id, quant.quant, files, dest, mmproj=mm_name, kind=quant.kind)
         except DownloadError as e:
             QMessageBox.warning(self, "다운로드할 수 없어요", str(e))
             return None

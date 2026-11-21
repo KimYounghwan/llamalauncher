@@ -191,6 +191,7 @@ class QuantFile:
     size: int
     sha256: list[Optional[str]] = field(default_factory=list)
     sizes: list[int] = field(default_factory=list)
+    kind: str = "gguf"         # gguf | mlx | safetensors (뒤의 둘은 저장소 폴더 전체를 받는다)
 
     @property
     def filename(self) -> str:
@@ -258,6 +259,48 @@ def parse_tree(repo: str, entries: list[dict]) -> RepoFiles:
     return RepoFiles(repo, quants, mmproj, other)
 
 
+# 폴더형 모델(MLX/safetensors)에서 받을 파일과 건너뛸 파일
+_REPO_KEEP = re.compile(r"\.(json|safetensors|model|tiktoken|txt|jinja|py)$|(^|/)tokenizer[^/]*$", re.I)
+_REPO_SKIP = re.compile(r"(^|/)(readme|license|notice|use_policy)[^/]*$|^original/|^\.|\.(md|png|jpe?g|gif|pdf)$", re.I)
+
+
+def repo_variant_label(repo: str, fmt: str) -> str:
+    name = repo.split("/")[-1]
+    m = re.search(r"(\d)[-_]?bit", name, re.I)
+    if m:
+        return f"{m.group(1)}bit"
+    for tag in ("AWQ", "GPTQ", "FP8", "MXFP4", "NVFP4", "BF16", "FP16"):
+        if re.search(rf"(^|[-_.]){tag}([-_.]|$)", name, re.I):
+            return tag
+    return "BF16 (원본)" if fmt == "safetensors" else "기본"
+
+
+def parse_repo_snapshot(repo: str, entries: list[dict], fmt: str) -> RepoFiles:
+    """MLX/safetensors 저장소: 필요한 파일 전체를 하나의 '변형'으로 묶는다."""
+    files = []
+    for e in entries:
+        path = e.get("path", "")
+        if e.get("type") != "file" or _REPO_SKIP.search(path) or not _REPO_KEEP.search(path):
+            continue
+        size = int((e.get("lfs") or {}).get("size") or e.get("size") or 0)
+        files.append((path, size, (e.get("lfs") or {}).get("oid")))
+    if not any(p.lower().endswith(".safetensors") for p, _, _ in files):
+        return RepoFiles(repo, [], [], [])
+    files.sort()
+    q = QuantFile(quant=repo_variant_label(repo, fmt), paths=[p for p, _, _ in files], size=sum(s for _, s, _ in files),
+                  sha256=[h for _, _, h in files], sizes=[s for _, s, _ in files], kind=fmt)
+    return RepoFiles(repo, [q], [], [])
+
+
+def quant_hint(name: str, fmt: str) -> str:
+    """저장소 이름으로 크기를 어림할 때 쓸 양자화 이름 (적합도 계산용)."""
+    if fmt == "gguf":
+        return "Q4_K_M"
+    label = repo_variant_label(name, fmt)
+    return {"8bit": "Q8_0", "6bit": "Q6_K", "5bit": "Q5_K_M", "4bit": "Q4_K_M", "3bit": "Q3_K_M", "2bit": "Q2_K",
+            "AWQ": "Q4_K_M", "GPTQ": "Q4_K_M", "FP8": "Q8_0", "MXFP4": "Q4_0", "NVFP4": "Q4_0"}.get(label, "F16")
+
+
 def _disambiguate(quants: list[QuantFile]) -> None:
     """같은 양자화 이름이 여러 개면(예: Q4_0 과 QAD-Q4_0) 파일 이름에서 구분되는 부분을 보여준다."""
     counts: dict[str, int] = {}
@@ -316,10 +359,10 @@ def score(model: HFModel, fit: Optional[Fit], trusted: bool, keyword_match: bool
     return s
 
 
-def model_fit(model: HFModel, system: Optional[SystemInfo]) -> Optional[Fit]:
+def model_fit(model: HFModel, system: Optional[SystemInfo], fmt: str = "gguf") -> Optional[Fit]:
     if system is None:
         return None
-    spec = model.estimated_spec()
+    spec = model.estimated_spec(quant_hint(model.id, fmt))
     return assess_fit(system, spec, 8192).fit if spec else None
 
 
@@ -419,6 +462,8 @@ class HFClient:
         cat_trusted = bool(cat and cat.trusted_only)
         out = []
         for m in models:
+            if fmt == "safetensors" and ("mlx" in m.tags or "gguf" in m.tags or "mlx" in m.id.lower()):
+                continue  # MLX/GGUF 저장소도 safetensors 태그가 붙어 있어 섞여 나온다
             if hide_risky and self.catalog.is_hidden(m.id):
                 continue
             if (trusted_only or cat_trusted) and not self.catalog.is_trusted(m.author):
@@ -429,12 +474,12 @@ class HFClient:
                 continue
             if cat and cat.max_params_b and (m.params_b is None or m.params_b > cat.max_params_b):
                 continue
-            if cat and cat.fit_only and system and model_fit(m, system) != Fit.COMFORTABLE:
+            if cat and cat.fit_only and system and model_fit(m, system, fmt) != Fit.COMFORTABLE:
                 continue
             out.append(m)
 
         if sort == "recommended":
-            out.sort(key=lambda m: score(m, model_fit(m, system), self.catalog.is_trusted(m.author),
+            out.sort(key=lambda m: score(m, model_fit(m, system, fmt), self.catalog.is_trusted(m.author),
                                          bool(cat and cat.matches_keywords(m.id))), reverse=True)
         elif sort == "likes":
             out.sort(key=lambda m: m.likes, reverse=True)
@@ -445,9 +490,12 @@ class HFClient:
         return out[:limit]
 
     # ---- 상세
-    def list_files(self, repo: str, use_cache: bool = True) -> RepoFiles:
+    def list_files(self, repo: str, use_cache: bool = True, fmt: str = "gguf") -> RepoFiles:
         data = self.get_json(f"/api/models/{repo}/tree/main", [("recursive", "true")], use_cache=use_cache)
-        return parse_tree(repo, data if isinstance(data, list) else [])
+        entries = data if isinstance(data, list) else []
+        if fmt in ("mlx", "safetensors"):
+            return parse_repo_snapshot(repo, entries, fmt)
+        return parse_tree(repo, entries)
 
     def readme_summary(self, repo: str, max_chars: int = 700) -> str:
         cp = self._cache_path("readme:" + repo)

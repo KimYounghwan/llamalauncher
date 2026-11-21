@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
 
 from ..core import gguf
 from ..core.hardware import SystemInfo, format_bytes
+from ..core.launchers import all_launchers, by_id
 from ..core.launchers.base import LauncherStatus
-from ..core.launchers.llamacpp import LlamaCppLauncher
 from ..core.netutil import find_free_port, generate_api_key, is_port_free, lan_ip
 from ..core.recommender import (
     CTX_STEPS, Fit, ModelSpec, Preset, ServerOptions, assess_fit, build_server_args, format_command, recommend,
@@ -70,13 +70,18 @@ def _tip_label(text: str, tip: str) -> QLabel:
 class ServerTab(QWidget):
     server_state_changed = Signal(object)
     model_file_picked = Signal(str)  # [파일 선택…]으로 직접 고른 모델 (내 모델 목록에 추가용)
+    open_launchers = Signal()        # 런처 탭으로 가기 (엔진이 설치되지 않았을 때)
 
     def __init__(self, settings: Settings, save_settings):
         super().__init__()
         self.settings = settings
         self.save_settings = save_settings
         self.system: Optional[SystemInfo] = None
-        self.launcher = LlamaCppLauncher()
+        try:
+            self.launcher = by_id(settings.server_engine)
+        except KeyError:
+            self.launcher = by_id("llamacpp")
+        self.model_dir: Optional[str] = None  # MLX/vLLM처럼 모델이 폴더인 경우
         self.launcher_status: Optional[LauncherStatus] = None
         self.model_info: Optional[gguf.GGUFInfo] = None
         # 내 모델 탭이 채워 주는 도우미 (표시 이름, Ollama처럼 같은 폴더에 없는 비전 파일)
@@ -161,10 +166,23 @@ class ServerTab(QWidget):
         lay.addWidget(self.model_lbl)
 
         row2 = QHBoxLayout()
+        row2.addWidget(QLabel("<b>실행 엔진</b>"))
+        self.engine_combo = QComboBox()
+        self.engine_combo.setToolTip("모델을 실행할 프로그램이에요. 잘 모르면 llama.cpp를 쓰세요.")
+        for l in all_launchers():
+            if l.runnable and l.availability(None)[0]:
+                self.engine_combo.addItem(l.name, l.id)
+        self.engine_combo.setCurrentIndex(max(0, self.engine_combo.findData(self.launcher.id)))
+        self.engine_combo.activated.connect(lambda i: self.set_engine(self.engine_combo.itemData(i)))
+        row2.addWidget(self.engine_combo)
         self.launcher_lbl = QLabel("llama.cpp 확인 중…")
         self.launcher_lbl.setObjectName("cardDetail")
         self.launcher_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         row2.addWidget(self.launcher_lbl, 1)
+        self.install_btn = QPushButton("🚀 설치하러 가기")
+        self.install_btn.clicked.connect(self.open_launchers.emit)
+        self.install_btn.hide()
+        row2.addWidget(self.install_btn)
         path_btn = QPushButton("실행 파일 지정…")
         path_btn.clicked.connect(self._pick_launcher)
         row2.addWidget(path_btn)
@@ -511,12 +529,20 @@ class ServerTab(QWidget):
         self._update_fit_label()
 
     def _command_text(self, mask: bool) -> str:
-        exe = str(self.launcher_status.path) if self.launcher_status and self.launcher_status.path else "llama-server"
-        model = str(self.model_info.path) if self.model_info else "<모델 파일>"
-        caps = self.launcher_status.capabilities if self.launcher_status and self.launcher_status.capabilities else None
         o = self.current_options()
-        args = build_server_args(o, model, caps=caps) if caps else build_server_args(o, model)
-        return format_command([exe, *args], api_key=o.api_key if mask else "")
+        model = self.model_path or ("<모델 폴더>" if self.launcher.model_is_dir else "<모델 파일>")
+        st = self.launcher_status
+        if not st or not st.installed:
+            st = LauncherStatus(installed=False, path=Path(self.launcher.id), capabilities=set())
+        if self.launcher.id == "llamacpp" and not st.capabilities:
+            exe = str(st.path) if st.installed else "llama-server"
+            return format_command([exe, *build_server_args(o, model)], api_key=o.api_key if mask else "")
+        try:
+            spec = self.launcher.serve_spec(st, model, o, self.system)
+        except Exception as e:  # noqa: BLE001
+            return f"(명령을 만들 수 없어요: {e})"
+        env = "".join(f"{k}={v} " for k, v in spec.env.items())
+        return env + format_command([spec.program, *spec.args], api_key=o.api_key if mask else "")
 
     # ------------------------------------------------------------------ 시스템/런처/모델
     def set_system(self, info: SystemInfo) -> None:
@@ -528,29 +554,74 @@ class ServerTab(QWidget):
             self.auto_configure()
         self._update_fit_label()
 
-    def detect_launcher(self) -> None:
-        self.launcher_lbl.setText("llama.cpp 확인 중…")
-        custom = self.settings.launcher_paths.get("llamacpp")
-        run_in_background(lambda: self.launcher.detect(custom), self._on_launcher)
+    def set_engine(self, launcher_id: str) -> None:
+        """실행 엔진을 바꾼다. 포트가 이전 엔진의 기본값이면 새 엔진의 기본값으로 바꾼다."""
+        if launcher_id == self.launcher.id:
+            return
+        if self.controller.is_active:
+            QMessageBox.information(self, "서버 실행 중", "엔진을 바꾸려면 먼저 서버를 중지해 주세요.")
+            self.engine_combo.setCurrentIndex(self.engine_combo.findData(self.launcher.id))
+            return
+        old = self.launcher
+        self.launcher = by_id(launcher_id)
+        self.settings.server_engine = launcher_id
+        self.save_settings()
+        self.engine_combo.setCurrentIndex(self.engine_combo.findData(launcher_id))
+        if self.port.value() == old.default_port:
+            self.port.setValue(self.launcher.default_port)
+        # 모델 형식이 맞지 않으면 선택을 비운다 (GGUF 파일 ↔ 폴더)
+        if self.launcher.model_is_dir and self.model_info:
+            self.model_info = None
+        elif not self.launcher.model_is_dir and self.model_dir:
+            self.model_dir = None
+        self.launcher_status = None
+        self.detect_launcher()
 
-    def _on_launcher(self, st: LauncherStatus) -> None:
+    @property
+    def model_path(self) -> Optional[str]:
+        if self.launcher.model_is_dir:
+            return self.model_dir
+        return str(self.model_info.path) if self.model_info else None
+
+    def detect_launcher(self) -> None:
+        self.launcher_lbl.setText(f"{self.launcher.name} 확인 중…")
+        custom = self.settings.launcher_paths.get(self.launcher.id)
+        launcher = self.launcher
+        run_in_background(lambda: (launcher, launcher.detect(custom)), self._on_launcher)
+
+    def _on_launcher(self, result) -> None:
+        launcher, st = result if isinstance(result, tuple) else (self.launcher, result)
+        if launcher.id != self.launcher.id:
+            return  # 그 사이에 엔진이 바뀜
         self.launcher_status = st
         if st.installed:
-            self.launcher_lbl.setText(f"✅ llama.cpp {st.version} · {st.path}")
+            self.launcher_lbl.setText(f"✅ {launcher.name} {st.version} · {st.path}")
         else:
-            self.launcher_lbl.setText(f"❌ {st.message}")
+            ok, why = launcher.availability(self.system)
+            self.launcher_lbl.setText(f"❌ {st.message}" + (f" ({why})" if not ok else ""))
+        self.install_btn.setVisible(not st.installed)
+        self._refresh_model_combo()
         self._on_option_changed()
         self._on_state(self.controller.state)
 
     def _pick_launcher(self) -> None:
-        flt = "llama-server (llama-server.exe)" if QGuiApplication.platformName() == "windows" else ""
-        path, _ = QFileDialog.getOpenFileName(self, "llama-server 실행 파일 선택", "", flt)
+        if self.launcher.id == "llamacpp":
+            title = "llama-server 실행 파일 선택"
+        else:
+            title = f"{self.launcher.name} 실행 파일 선택"
+        path, _ = QFileDialog.getOpenFileName(self, title, "")
         if path:
-            self.settings.launcher_paths["llamacpp"] = path
+            self.settings.launcher_paths[self.launcher.id] = path
             self.save_settings()
             self.detect_launcher()
 
     def _pick_model(self) -> None:
+        if self.launcher.model_is_dir:
+            d = QFileDialog.getExistingDirectory(self, f"{self.launcher.name} 모델 폴더 선택 (config.json이 있는 폴더)",
+                                                 self.settings.models_dir)
+            if d:
+                self._select_model(d)
+            return
         start = self.settings.last_model or self.settings.models_dir
         path, _ = QFileDialog.getOpenFileName(self, "모델 파일 선택", str(Path(start).parent if Path(start).is_file()
                                                                          else start), "GGUF 모델 (*.gguf)")
@@ -571,20 +642,40 @@ class ServerTab(QWidget):
             self.mmproj.setText(mmproj)
 
     def refresh_model_names(self) -> None:
-        cur = self.model_combo.currentData()
         self._refresh_model_combo()
-        if cur:
-            self.model_combo.setCurrentIndex(self.model_combo.findData(cur))
 
     def _refresh_model_combo(self) -> None:
         self.model_combo.clear()
+        want_dir = self.launcher.model_is_dir
+        self.model_combo.setPlaceholderText("모델 폴더를 선택해 주세요" if want_dir else "모델 파일을 선택해 주세요 (.gguf)")
         for p in self.settings.recent_models:
-            if Path(p).exists():
+            if Path(p).exists() and Path(p).is_dir() == want_dir:
                 self.model_combo.addItem(self.name_for(p), p)
                 self.model_combo.setItemData(self.model_combo.count() - 1, p, Qt.ToolTipRole)
+        if self.model_path:
+            self.model_combo.setCurrentIndex(self.model_combo.findData(self.model_path))
 
     def _select_model(self, path: Optional[str], auto_configure: bool = True) -> None:
         if not path:
+            return
+        if Path(path).is_dir():
+            if not self.launcher.model_is_dir:
+                QMessageBox.information(self, "형식이 맞지 않아요",
+                                        f"{self.launcher.name}은(는) .gguf 파일을 실행해요. 폴더 모델은 MLX-LM이나 vLLM 엔진을 골라 주세요.")
+                return
+            if not (Path(path) / "config.json").exists():
+                QMessageBox.warning(self, "모델 폴더가 아니에요", "선택한 폴더에 config.json이 없어요. 모델 파일이 들어 있는 폴더를 골라 주세요.")
+                return
+            self.model_dir = str(Path(path))
+            self.settings.add_recent_model(self.model_dir)
+            self.save_settings()
+            self._refresh_model_combo()
+            self._on_option_changed()
+            self._on_state(self.controller.state)
+            return
+        if self.launcher.model_is_dir:
+            QMessageBox.information(self, "형식이 맞지 않아요",
+                                    f"{self.launcher.name}은(는) 모델 폴더(MLX/safetensors)를 실행해요. GGUF 파일은 llama.cpp 등을 골라 주세요.")
             return
         try:
             info = gguf.inspect(path)
@@ -608,6 +699,17 @@ class ServerTab(QWidget):
 
     def _update_fit_label(self) -> None:
         i = self.model_info
+        if self.launcher.model_is_dir:
+            if not self.model_dir:
+                self.model_lbl.setText("선택한 모델이 없어요. [📂 파일 선택…]으로 모델 폴더를 골라 주세요.")
+                return
+            size = sum(f.stat().st_size for f in Path(self.model_dir).rglob("*") if f.is_file())
+            text = f"<b>{html.escape(Path(self.model_dir).name)}</b> · 폴더 · {format_bytes(size)}"
+            if self.system:
+                fit = assess_fit(self.system, ModelSpec(file_size=size), self.current_options().ctx_size)
+                text += f"<br>{fit.fit.badge} — {html.escape(fit.reason)}"
+            self.model_lbl.setText(text)
+            return
         if not i:
             self.model_lbl.setText("선택한 모델이 없어요. [📂 파일 선택…]으로 .gguf 파일을 골라 주세요.")
             return
@@ -685,8 +787,9 @@ class ServerTab(QWidget):
         if not st or not st.installed or not st.path:
             QMessageBox.warning(self, "llama.cpp 없음", "llama-server를 찾지 못했어요. [실행 파일 지정…]으로 위치를 알려 주세요.")
             return
-        if not self.model_info or not self.model_info.path.exists():
-            QMessageBox.information(self, "모델 선택", "먼저 실행할 모델 파일을 선택해 주세요.")
+        model = self.model_path
+        if not model or not Path(model).exists():
+            QMessageBox.information(self, "모델 선택", "먼저 실행할 모델을 선택해 주세요.")
             return
         o = self.current_options()
         if not is_port_free(o.port, o.host):
@@ -699,7 +802,7 @@ class ServerTab(QWidget):
                 o = self.current_options()
             else:
                 return
-        if self.system:
+        if self.system and self.model_info:
             spec = ModelSpec.from_gguf(self.model_info)
             fit = assess_fit(self.system, spec, o.ctx_size)
             if fit.fit == Fit.INSUFFICIENT and QMessageBox.warning(
@@ -709,16 +812,25 @@ class ServerTab(QWidget):
 
         self.settings.server_options = {k: v for k, v in o.to_dict().items() if k not in ("api_key", "mmproj")}
         self.save_settings()
-        args = build_server_args(o, str(self.model_info.path), caps=st.capabilities)
+        try:
+            spec = self.launcher.serve_spec(st, model, o, self.system)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "실행할 수 없어요", str(e))
+            return
         self.hint_lbl.hide()
         self.gen_lbl.setText("답변 생성 속도: —")
         self.prompt_lbl.setText("입력 처리 속도: —")
         self._open_log_file()
-        self._append_log("$ " + format_command([str(st.path), *args], api_key=o.api_key), "info")
-        self.running = {"api_key": o.api_key, "alias": o.alias or "local-model",
-                        "model_path": str(self.model_info.path), "vision": bool(o.mmproj),
-                        "model_name": self.name_for(str(self.model_info.path)), "ctx_size": o.ctx_size}
-        self.controller.start(str(st.path), args, o.host, o.port)
+        self._append_log("$ " + format_command([spec.program, *spec.args], api_key=o.api_key), "info")
+        for n in spec.notes:
+            self._append_log("ℹ️ " + n, "info")
+        is_dir = Path(model).is_dir()
+        self.running = {"api_key": o.api_key if self.launcher.id != "ollama" else "", "alias": spec.model_name,
+                        "model_path": model, "vision": bool(o.mmproj) and self.launcher.id != "ollama",
+                        "model_name": Path(model).name if is_dir else self.name_for(model), "ctx_size": o.ctx_size,
+                        "engine": self.launcher.id, "engine_name": self.launcher.name,
+                        "tools": bool(self.model_info and self.model_info.supports_tools)}
+        self.controller.start(spec.program, spec.args, spec.host, spec.port, spec.health_path, spec.env, spec.prepare)
 
     def restart_server(self) -> None:
         if not self.controller.is_active:
@@ -742,7 +854,7 @@ class ServerTab(QWidget):
         self.light.setStyleSheet(f"background:{color}; border-radius:8px;")
         self.state_lbl.setText(state.label)
         active = self.controller.is_active
-        ready = bool(self.launcher_status and self.launcher_status.installed and self.model_info)
+        ready = bool(self.launcher_status and self.launcher_status.installed and self.model_path)
         self.start_btn.setEnabled(not active and ready)
         self.stop_btn.setEnabled(state in (ServerState.STARTING, ServerState.RUNNING))
         self.restart_btn.setEnabled(state in (ServerState.RUNNING, ServerState.ERROR) and ready)

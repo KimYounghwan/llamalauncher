@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,9 +30,10 @@ class Source:
     FOLDER = "folder"       # 스캔해서 가져온 폴더
     LMSTUDIO = "lmstudio"
     OLLAMA = "ollama"
+    HFCACHE = "hfcache"
 
     LABELS = {DOWNLOAD: "⬇️ 받은 모델", ADDED: "📄 직접 추가", FOLDER: "📁 폴더",
-              LMSTUDIO: "🧪 LM Studio", OLLAMA: "🦙 Ollama"}
+              LMSTUDIO: "🧪 LM Studio", OLLAMA: "🦙 Ollama", HFCACHE: "🤗 HF 캐시"}
 
 
 @dataclass
@@ -46,6 +48,8 @@ class LocalModel:
     mmproj: Optional[Path] = None
     info: Optional[gguf.GGUFInfo] = None
     error: str = ""
+    fmt: str = "gguf"       # gguf | mlx | safetensors (뒤의 둘은 폴더)
+    dir_meta: dict = field(default_factory=dict)   # 폴더형 모델의 config.json 요약
 
     @property
     def key(self) -> str:
@@ -55,6 +59,8 @@ class LocalModel:
     def display_name(self) -> str:
         if self.name:
             return self.name
+        if self.path.is_dir():
+            return self.repo.split("/")[-1] if self.repo else self.path.name
         stem = gguf.SPLIT_RE.sub("", self.path.name)
         return stem[:-5] if stem.lower().endswith(".gguf") else stem
 
@@ -63,9 +69,13 @@ class LocalModel:
         return bool(self.info and self.info.architecture in EMBEDDING_ARCHS)
 
     @property
+    def is_dir(self) -> bool:
+        return self.fmt != "gguf"
+
+    @property
     def deletable(self) -> bool:
-        """Ollama 모델은 Ollama가 관리하는 파일이라 직접 지우지 않는다."""
-        return self.source != Source.OLLAMA
+        """Ollama 모델은 Ollama가, HF 캐시는 huggingface 도구가 관리하는 파일이라 직접 지우지 않는다."""
+        return self.source not in (Source.OLLAMA, Source.HFCACHE)
 
 
 def quant_from_name(name: str) -> str:
@@ -99,6 +109,59 @@ def scan_folder(root: Path, max_depth: int = MAX_SCAN_DEPTH) -> list[Path]:
             if is_model_file(p):
                 found.append(p)
     return sorted(found)
+
+
+def is_model_dir(d: Path) -> bool:
+    try:
+        return (d / "config.json").is_file() and any(d.glob("*.safetensors"))
+    except OSError:
+        return False
+
+
+def dir_format(d: Path, config: Optional[dict] = None) -> str:
+    if config is None:
+        try:
+            config = json.loads((d / "config.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            config = {}
+    q = config.get("quantization")
+    if isinstance(q, dict) and "group_size" in q or "mlx" in str(d).lower():
+        return "mlx"
+    return "safetensors"
+
+
+def scan_model_dirs(root: Path, max_depth: int = 4) -> list[Path]:
+    """config.json + *.safetensors가 있는 폴더(MLX/safetensors 모델)를 찾는다."""
+    found: list[Path] = []
+    root = Path(root).expanduser()
+    if not root.is_dir():
+        return found
+    base = len(root.parts)
+    for dirpath, dirnames, _ in os.walk(root):
+        d = Path(dirpath)
+        if is_model_dir(d):
+            found.append(d)
+            dirnames[:] = []
+            continue
+        if len(d.parts) - base >= max_depth:
+            dirnames[:] = []
+        dirnames[:] = [x for x in dirnames if x not in SKIP_DIRS and not x.startswith(".")]
+    return sorted(found)
+
+
+def hf_cache_dirs(home: Optional[Path] = None, env: Optional[dict] = None) -> list[Path]:
+    """허깅페이스 캐시(mlx_lm 등이 받은 모델)의 스냅샷 폴더들."""
+    home = home or _home()
+    env = os.environ if env is None else env
+    hub = Path(env["HF_HUB_CACHE"]) if env.get("HF_HUB_CACHE") else (
+        Path(env["HF_HOME"]) / "hub" if env.get("HF_HOME") else home / ".cache" / "huggingface" / "hub")
+    out = []
+    if hub.is_dir():
+        for repo in sorted(hub.glob("models--*")):
+            snaps = sorted((repo / "snapshots").glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if snaps and is_model_dir(snaps[0]):
+                out.append(snaps[0])
+    return out
 
 
 def _home() -> Path:
@@ -184,7 +247,9 @@ def _size_of(p: Path) -> int:
 
 
 def load_info(m: LocalModel) -> LocalModel:
-    """GGUF 헤더를 읽어 m.info를 채운다 (실패하면 m.error)."""
+    """GGUF 헤더(또는 폴더 모델의 config.json)를 읽어 정보를 채운다 (실패하면 m.error)."""
+    if m.path.is_dir():
+        return _load_dir_info(m)
     try:
         m.info = gguf.inspect(m.path)
         m.size = m.info.file_size
@@ -199,6 +264,35 @@ def load_info(m: LocalModel) -> LocalModel:
                 m.size = _size_of(m.path)
             except OSError:
                 pass
+    return m
+
+
+def _load_dir_info(m: LocalModel) -> LocalModel:
+    from .hf_client import repo_variant_label
+    try:
+        cfg = json.loads((m.path / "config.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        m.error = f"config.json을 읽을 수 없어요: {e}"
+        return m
+    m.fmt = dir_format(m.path, cfg)
+    text = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else cfg
+    m.dir_meta = {
+        "model_type": cfg.get("model_type", ""),
+        "ctx": text.get("max_position_embeddings"),
+        "layers": text.get("num_hidden_layers"),
+    }
+    q = cfg.get("quantization") or {}
+    qc = cfg.get("quantization_config") or {}
+    if isinstance(q, dict) and q.get("bits"):
+        m.quant = f"{q['bits']}bit"
+    elif isinstance(qc, dict) and qc.get("quant_method"):
+        m.quant = str(qc["quant_method"]).upper()
+    elif not m.quant:
+        m.quant = repo_variant_label(m.repo or m.path.name, m.fmt)
+    try:
+        m.size = sum(f.stat().st_size for f in m.path.rglob("*") if f.is_file())
+    except OSError:
+        pass
     return m
 
 
@@ -218,7 +312,10 @@ def _file_model(p: Path, source: str) -> LocalModel:
         date = datetime.fromtimestamp(st.st_mtime)
     except OSError:
         date = None
-    return LocalModel(path=p, source=source, quant=quant_from_name(p.name), date=date)
+    m = LocalModel(path=p, source=source, quant="" if p.is_dir() else quant_from_name(p.name), date=date)
+    if p.is_dir():
+        m.fmt = dir_format(p)
+    return m
 
 
 def collect(src: LibrarySources, read_headers: bool = True) -> list[LocalModel]:
@@ -235,7 +332,7 @@ def collect(src: LibrarySources, read_headers: bool = True) -> list[LocalModel]:
     mdir = Path(src.models_dir)
     for e in read_manifest(mdir):
         p = Path(e.get("path", ""))
-        if not p.is_file():
+        if not (p.is_file() or p.is_dir()):
             continue
         date = None
         try:
@@ -251,13 +348,23 @@ def collect(src: LibrarySources, read_headers: bool = True) -> list[LocalModel]:
         if len(rel) >= 3:
             m.repo = f"{rel[0]}/{rel[1]}"
         add(m)
+    for sub in ("mlx", "safetensors"):
+        for d in scan_model_dirs(mdir / sub, max_depth=2):
+            m = _file_model(d, Source.DOWNLOAD)
+            m.repo = d.name.replace("__", "/", 1) if "__" in d.name else ""
+            add(m)
     for a in src.added:
         p = Path(a)
         if p.is_file():
             add(_file_model(p, Source.ADDED))
+    for a in src.added:
+        if Path(a).is_dir() and is_model_dir(Path(a)):
+            add(_file_model(Path(a), Source.ADDED))
     for f in src.folders:
         for p in scan_folder(Path(f)):
             add(_file_model(p, Source.FOLDER))
+        for d in scan_model_dirs(Path(f)):
+            add(_file_model(d, Source.FOLDER))
     if src.include_external:
         for d in lmstudio_dirs(src.home):
             for p in scan_folder(d):
@@ -266,6 +373,16 @@ def collect(src: LibrarySources, read_headers: bool = True) -> list[LocalModel]:
                 if len(rel) >= 3:
                     m.repo = f"{rel[0]}/{rel[1]}"
                 add(m)
+            for md in scan_model_dirs(d):
+                m = _file_model(md, Source.LMSTUDIO)
+                rel = md.relative_to(d).parts
+                if len(rel) >= 2:
+                    m.repo = f"{rel[0]}/{rel[1]}"
+                add(m)
+        for d in hf_cache_dirs(src.home):
+            m = _file_model(d, Source.HFCACHE)
+            m.repo = d.parent.parent.name.removeprefix("models--").replace("--", "/", 1)
+            add(m)
         for d in ollama_dirs(src.home):
             for m in scan_ollama(d):
                 add(m)
@@ -280,6 +397,8 @@ def collect(src: LibrarySources, read_headers: bool = True) -> list[LocalModel]:
 # ---------------------------------------------------------------- 삭제
 def files_of(m: LocalModel, others: Iterable[LocalModel] = ()) -> list[Path]:
     """삭제할 파일: 모델(분할 조각 포함) + 같은 폴더의 다른 모델이 쓰지 않는 비전 파일."""
+    if m.path.is_dir():
+        return [m.path]
     files = [p for p in gguf.split_parts(m.path) if p.exists()]
     if m.mmproj and m.mmproj.exists():
         shared = any(o.path != m.path and o.mmproj and o.mmproj == m.mmproj for o in others)
@@ -293,7 +412,10 @@ def delete_model(m: LocalModel, models_dir: Path, others: Iterable[LocalModel] =
         raise PermissionError("Ollama 모델은 Ollama에서 지워 주세요 (터미널: ollama rm 이름).")
     removed = []
     for p in files_of(m, others):
-        p.unlink(missing_ok=True)
+        if p.is_dir():
+            shutil.rmtree(p)
+        else:
+            p.unlink(missing_ok=True)
         removed.append(p)
     # 받은 모델 기록에서도 지운다
     mp = manifest_path(models_dir)

@@ -8,8 +8,10 @@ import sys
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from ..settings import APP_NAME
-from .base import Launcher, LauncherStatus, env_path, exe_name, run_capture
+from .base import (
+    CommandStep, GithubReleaseStep, InstallPlan, Launcher, LauncherStatus, RemovePathStep, ServeSpec, bin_dir,
+    brew_plan, env_path, exe_name, has_brew, has_winget, is_brew_path, is_under, run_capture, winget_plan,
+)
 
 VERSION_RE = re.compile(r"version:\s*(\S+)\s*\(build\s*(\d+)", re.I)
 OLD_VERSION_RE = re.compile(r"version:\s*(\d+)\s*\((\w+)\)", re.I)
@@ -19,7 +21,10 @@ def candidate_paths() -> list[Path]:
     """PATH에 없을 때 찾아볼 일반적인 설치 위치."""
     name = exe_name("llama-server")
     home = Path.home()
-    paths: list[Path] = [home / APP_NAME / "bin" / "llama.cpp" / name]
+    own = bin_dir("llamacpp")
+    paths: list[Path] = [own / name]
+    if own.is_dir():  # 압축 파일 구조가 바뀌어도 찾을 수 있게
+        paths += sorted(own.rglob(name))
     if sys.platform == "darwin":
         paths += [Path("/opt/homebrew/bin") / name, Path("/usr/local/bin") / name]
     elif sys.platform == "win32":
@@ -83,7 +88,9 @@ class LlamaCppLauncher(Launcher):
     id = "llamacpp"
     name = "llama.cpp"
     description = "가볍고 빠른 기본 실행 엔진. GGUF 모델을 거의 모든 컴퓨터에서 실행해요."
-    supported_formats = ("gguf",)
+    homepage = "https://github.com/ggml-org/llama.cpp"
+    formats = ("gguf",)
+    default_port = 8080
 
     def __init__(self, runner: Callable[[list[str]], Optional[str]] = run_capture):
         self.runner = runner
@@ -101,3 +108,52 @@ class LlamaCppLauncher(Launcher):
             caps = {"fa_value", "alias", "api_key", "jinja", "cache_type_v", "min_p", "no_mmap", "mlock", "mmproj"}
         return LauncherStatus(installed=True, path=path, version=version or "버전 확인 불가",
                               build=build, capabilities=caps)
+
+    # ---- 설치 ----------------------------------------------------------
+    def _github_plan(self, system) -> InstallPlan:
+        from ..installer import pick_llamacpp_assets
+        gpu = system.primary_gpu.vendor if system and system.primary_gpu else "unknown"
+        machine = system.arch if system else ""
+        return InstallPlan("GitHub에서 받아 설치", [GithubReleaseStep(
+            repo="ggml-org/llama.cpp", dest=bin_dir(self.id),
+            picker=lambda names: pick_llamacpp_assets(names, sys.platform, machine, gpu),
+            desc=f"llama.cpp 최신 버전 받기 ({_gpu_label(gpu)})", allow_prerelease=True)],
+            note=f"설치 위치: {bin_dir(self.id)} (관리자 권한 필요 없음)")
+
+    def install_plans(self, system) -> list[InstallPlan]:
+        plans = []
+        if brew := has_brew():
+            plans.append(brew_plan(brew, "llama.cpp"))
+        if winget := has_winget():
+            plans.append(winget_plan(winget, "ggml.llamacpp"))
+        plans.append(self._github_plan(system))
+        return plans
+
+    def update_plans(self, system, status: LauncherStatus) -> list[InstallPlan]:
+        if is_brew_path(status.path) and (brew := has_brew()):
+            return [InstallPlan("Homebrew로 업데이트", [CommandStep([str(brew), "upgrade", "llama.cpp"], "brew upgrade llama.cpp")])]
+        if is_under(status.path, bin_dir(self.id)):
+            return [self._github_plan(system)]
+        if "WinGet" in str(status.path) and (winget := has_winget()):
+            return [InstallPlan("winget으로 업데이트", [CommandStep([str(winget), "upgrade", "-e", "--id", "ggml.llamacpp"])])]
+        return []
+
+    def uninstall_plans(self, status: LauncherStatus) -> list[InstallPlan]:
+        if is_brew_path(status.path) and (brew := has_brew()):
+            return [InstallPlan("Homebrew로 제거", [CommandStep([str(brew), "uninstall", "llama.cpp"], "brew uninstall llama.cpp")])]
+        if is_under(status.path, bin_dir(self.id)):
+            return [InstallPlan("라마런처가 받은 파일 지우기", [RemovePathStep(bin_dir(self.id), "llama.cpp 폴더 삭제")])]
+        if "WinGet" in str(status.path) and (winget := has_winget()):
+            return [InstallPlan("winget으로 제거", [CommandStep([str(winget), "uninstall", "-e", "--id", "ggml.llamacpp"])])]
+        return []
+
+    # ---- 실행 ----------------------------------------------------------
+    def serve_spec(self, status, model, opts, system=None) -> ServeSpec:
+        from ..recommender import build_server_args
+        return ServeSpec(program=str(status.path), args=build_server_args(opts, model, caps=status.capabilities),
+                         host=opts.host, port=opts.port, health_path="/health",
+                         model_name=opts.alias or "local-model")
+
+
+def _gpu_label(vendor: str) -> str:
+    return {"nvidia": "NVIDIA CUDA", "amd": "Vulkan", "intel": "Vulkan", "apple": "Apple Metal"}.get(vendor, "CPU")

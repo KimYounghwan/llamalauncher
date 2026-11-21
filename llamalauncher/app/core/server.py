@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from collections import deque
 from enum import Enum
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import psutil
-from PySide6.QtCore import QObject, QProcess, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, QUrl, Signal
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 
 from . import server_log
@@ -61,6 +62,7 @@ class ServerController(QObject):
     speed_changed = Signal(str, float)    # ("prompt"|"generate", tokens/s)
     memory_changed = Signal(object)       # 바이트 (int는 2GB에서 넘침)
     error_hint = Signal(str)
+    _prepared = Signal(object)            # 준비 작업 결과 (None이면 성공, 문자열이면 오류) — 작업 스레드 → UI 스레드
 
     HEALTH_INTERVAL_MS = 1000
     STOP_GRACE_MS = 5000
@@ -72,6 +74,12 @@ class ServerController(QObject):
         self.host = "127.0.0.1"
         self.port = 8080
         self.started_at = 0.0
+        self.health_path = "/health"
+        self.program_name = "llama-server"
+        self._prepare = None
+        self._preparing = False
+        self._fail_hint: Optional[str] = None
+        self._prepared.connect(self._on_prepared)
         self._buf = b""
         self._recent: deque[str] = deque(maxlen=80)
         self._net = QNetworkAccessManager(self)
@@ -99,14 +107,26 @@ class ServerController(QObject):
             return int(self.proc.processId())
         return None
 
-    def start(self, program: str, args: list[str], host: str, port: int) -> None:
+    def start(self, program: str, args: list[str], host: str, port: int, health_path: str = "/health",
+              env: Optional[dict] = None, prepare=None) -> None:
+        """prepare(log): 서버가 응답하기 시작한 뒤, '실행 중'으로 바꾸기 전에 할 일 (예: Ollama 모델 등록)."""
         if self.is_active:
             return
         self.host, self.port = host, port
+        self.health_path = health_path
+        self.program_name = Path(program).name
+        self._prepare = prepare
+        self._preparing = False
+        self._fail_hint = None
         self._buf = b""
         self._recent.clear()
         self.proc = QProcess(self)
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
+        if env:
+            penv = QProcessEnvironment.systemEnvironment()
+            for k, v in env.items():
+                penv.insert(k, str(v))
+            self.proc.setProcessEnvironment(penv)
         self.proc.readyReadStandardOutput.connect(self._on_output)
         self.proc.finished.connect(self._on_finished)
         self.proc.errorOccurred.connect(self._on_proc_error)
@@ -178,6 +198,11 @@ class ServerController(QObject):
             self._recent.append(self._buf.decode("utf-8", errors="replace"))
             self.log_line.emit(self._recent[-1], server_log.classify(self._recent[-1]))
             self._buf = b""
+        if self._fail_hint:
+            self.error_hint.emit(self._fail_hint)
+            self._fail_hint = None
+            self._set_state(ServerState.ERROR)
+            return
         if self.state == ServerState.STOPPING:
             self._set_state(ServerState.STOPPED)
             return
@@ -191,7 +216,7 @@ class ServerController(QObject):
 
     def _on_proc_error(self, err) -> None:
         if err == QProcess.FailedToStart:
-            self.error_hint.emit("llama-server를 실행하지 못했어요. 실행 파일 경로와 권한을 확인해 주세요.")
+            self.error_hint.emit(f"{self.program_name}을(를) 실행하지 못했어요. 실행 파일 경로와 권한을 확인해 주세요.")
             self._set_state(ServerState.ERROR)
 
     def _force_kill(self) -> None:
@@ -202,7 +227,7 @@ class ServerController(QObject):
         if self._health_pending or self.state not in (ServerState.STARTING, ServerState.RUNNING):
             return
         self._health_pending = True
-        req = QNetworkRequest(QUrl(self.base_url + "/health"))
+        req = QNetworkRequest(QUrl(self.base_url + self.health_path))
         req.setTransferTimeout(1500)
         reply = self._net.get(req)
         reply.finished.connect(lambda r=reply: self._on_health(r))
@@ -213,10 +238,34 @@ class ServerController(QObject):
         reply.deleteLater()
         if self.state not in (ServerState.STARTING, ServerState.RUNNING):
             return
-        if status == 200:
-            self._set_state(ServerState.RUNNING)
+        if status == 200 and self.state == ServerState.STARTING:
+            if self._prepare is None:
+                self._set_state(ServerState.RUNNING)
+            elif not self._preparing:
+                self._preparing = True
+                prep = self._prepare
+                threading.Thread(target=self._run_prepare, args=(prep,), daemon=True).start()
         elif self.state == ServerState.RUNNING and status is None:
             pass  # 일시적 연결 실패는 무시 (프로세스 종료는 finished로 감지)
+
+    def _run_prepare(self, prep) -> None:
+        try:
+            prep(lambda line: self.log_line.emit(line, "info"))
+        except Exception as e:  # noqa: BLE001
+            self._prepared.emit(str(e) or "모델 준비에 실패했어요.")
+        else:
+            self._prepared.emit(None)
+
+    def _on_prepared(self, err) -> None:
+        self._preparing = False
+        if self.state != ServerState.STARTING:
+            return
+        if err:
+            self._fail_hint = err   # 프로세스가 끝나면 '중지'가 아니라 '오류'로 보여준다
+            self.stop()
+        else:
+            self._prepare = None
+            self._set_state(ServerState.RUNNING)
 
     def _sample_memory(self) -> None:
         pid = self.pid
