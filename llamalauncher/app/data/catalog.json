@@ -1,0 +1,229 @@
+{
+  "_comment": "모델 찾기 카테고리 정의. 모델 이름을 고정하지 않고 검색 조건으로 정의해서 새 모델이 나와도 자동으로 반영된다. 앱 업데이트 없이 이 파일만 바꿔도 된다.",
+  "version": 1,
+  "categories": [
+    {
+      "id": "recommended",
+      "icon": "⭐",
+      "name": "내 컴퓨터 추천",
+      "description": "검증된 제작자의 인기 대화 모델 중 이 컴퓨터에서 잘 돌아가는 것",
+      "queries": [
+        {
+          "pipeline_tag": "text-generation"
+        },
+        {
+          "pipeline_tag": "image-text-to-text"
+        }
+      ],
+      "trusted_only": true,
+      "fit_only": true
+    },
+    {
+      "id": "chat",
+      "icon": "💬",
+      "name": "일반 대화",
+      "description": "질문 답변, 글쓰기, 요약 등 일반적인 용도",
+      "queries": [
+        {
+          "pipeline_tag": "text-generation"
+        },
+        {
+          "pipeline_tag": "image-text-to-text"
+        }
+      ]
+    },
+    {
+      "id": "korean",
+      "icon": "🇰🇷",
+      "name": "한국어 특화",
+      "description": "한국어를 특히 잘하도록 만들어진 모델",
+      "queries": [
+        {
+          "filter": "ko",
+          "pipeline_tag": "text-generation"
+        },
+        {
+          "search": "exaone"
+        },
+        {
+          "search": "kanana"
+        },
+        {
+          "search": "hyperclova"
+        },
+        {
+          "search": "korean"
+        },
+        {
+          "search": "bllossom"
+        },
+        {
+          "search": "midm"
+        }
+      ],
+      "require_text": true,
+      "boost_keywords": [
+        "exaone",
+        "kanana",
+        "hyperclova",
+        "korean",
+        "bllossom",
+        "midm",
+        "-ko-",
+        "ko-"
+      ]
+    },
+    {
+      "id": "coding",
+      "icon": "💻",
+      "name": "코딩",
+      "description": "코드 작성, 설명, 디버깅, 코딩 에이전트 연동",
+      "queries": [
+        {
+          "search": "coder"
+        },
+        {
+          "search": "devstral"
+        },
+        {
+          "search": "codestral"
+        },
+        {
+          "search": "code"
+        }
+      ],
+      "require_text": true,
+      "boost_keywords": [
+        "coder",
+        "devstral",
+        "codestral",
+        "code"
+      ]
+    },
+    {
+      "id": "reasoning",
+      "icon": "🧠",
+      "name": "추론 (생각하는 모델)",
+      "description": "답하기 전에 단계적으로 생각해서 수학·논리 문제에 강한 모델",
+      "queries": [
+        {
+          "search": "thinking"
+        },
+        {
+          "search": "reasoning"
+        },
+        {
+          "search": "r1"
+        }
+      ],
+      "require_text": true,
+      "boost_keywords": [
+        "thinking",
+        "reasoning",
+        "r1",
+        "qwq"
+      ]
+    },
+    {
+      "id": "vision",
+      "icon": "👁️",
+      "name": "비전 (이미지 이해)",
+      "description": "사진이나 화면 캡처를 보고 설명할 수 있는 모델",
+      "queries": [
+        {
+          "pipeline_tag": "image-text-to-text"
+        }
+      ]
+    },
+    {
+      "id": "embedding",
+      "icon": "📚",
+      "name": "임베딩",
+      "description": "문서 검색(RAG)용으로 문장을 숫자로 바꾸는 모델. 대화용이 아니에요.",
+      "queries": [
+        {
+          "pipeline_tag": "feature-extraction"
+        },
+        {
+          "pipeline_tag": "sentence-similarity"
+        },
+        {
+          "search": "embed"
+        }
+      ],
+      "boost_keywords": [
+        "embed"
+      ]
+    },
+    {
+      "id": "light",
+      "icon": "🪶",
+      "name": "경량 (저사양용)",
+      "description": "4B 이하 작은 모델. 노트북이나 GPU 없는 컴퓨터에서도 빨라요.",
+      "queries": [
+        {
+          "pipeline_tag": "text-generation"
+        },
+        {
+          "pipeline_tag": "image-text-to-text"
+        }
+      ],
+      "max_params_b": 4.5
+    }
+  ],
+  "trusted_authors": [
+    "ggml-org",
+    "unsloth",
+    "bartowski",
+    "lmstudio-community",
+    "Qwen",
+    "google",
+    "microsoft",
+    "mistralai",
+    "meta-llama",
+    "LGAI-EXAONE",
+    "kakaocorp",
+    "naver-hyperclovax",
+    "nvidia",
+    "ibm-granite",
+    "deepseek-ai",
+    "openai",
+    "zai-org",
+    "THUDM",
+    "MaziyarPanahi",
+    "second-state",
+    "NousResearch",
+    "allenai",
+    "HuggingFaceTB",
+    "nomic-ai",
+    "mradermacher",
+    "Mungert",
+    "CohereLabs",
+    "LiquidAI",
+    "moonshotai",
+    "MiniMaxAI",
+    "tencent",
+    "baidu",
+    "upstage",
+    "skt",
+    "KT-AI",
+    "K-intelligence"
+  ],
+  "hidden_keywords": [
+    "uncensored",
+    "abliterated",
+    "heretic",
+    "nsfw",
+    "erotic",
+    "lewd",
+    "roleplay",
+    "-rp-",
+    "jailbreak",
+    "decensored"
+  ],
+  "text_pipelines": [
+    "text-generation",
+    "image-text-to-text",
+    "text2text-generation"
+  ]
+}

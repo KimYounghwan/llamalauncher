@@ -80,6 +80,18 @@ def read_metadata(path: Path | str) -> dict[str, Any]:
         return meta
 
 
+def find_mmproj(model_path: Path) -> Optional[Path]:
+    """모델과 같은 폴더의 비전 파일(mmproj-*.gguf)을 찾는다. F16 > BF16 > 기타 순."""
+    cands = sorted(Path(model_path).parent.glob("*mmproj*.gguf"))
+    if not cands:
+        return None
+    for pref in ("f16", "bf16"):
+        for c in cands:
+            if pref in c.name.lower() and not (pref == "f16" and "bf16" in c.name.lower()):
+                return c
+    return cands[0]
+
+
 def split_parts(path: Path) -> list[Path]:
     """분할 GGUF(-00001-of-00003.gguf)면 모든 조각 경로를, 아니면 자기 자신만 돌려준다."""
     m = SPLIT_RE.search(path.name)

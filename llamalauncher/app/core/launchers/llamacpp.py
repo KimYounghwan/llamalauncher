@@ -98,6 +98,6 @@ class LlamaCppLauncher(Launcher):
         caps = parse_capabilities(self.runner([str(path), "--help"]) or "")
         if not caps:
             # --help가 실패해도 최신 빌드라고 가정하고 기본 기능은 쓴다
-            caps = {"fa_value", "alias", "api_key", "jinja", "cache_type_v", "min_p", "no_mmap", "mlock"}
+            caps = {"fa_value", "alias", "api_key", "jinja", "cache_type_v", "min_p", "no_mmap", "mlock", "mmproj"}
         return LauncherStatus(installed=True, path=path, version=version or "버전 확인 불가",
                               build=build, capabilities=caps)

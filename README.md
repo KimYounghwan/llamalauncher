@@ -7,7 +7,7 @@ llama.cpp를 기본 엔진으로 사용하며 macOS와 Windows에서 동작합�
 
 - [x] 1단계: 시스템 사양 감지 + 추천 옵션 계산 + 테스트 + 대시보드 화면
 - [x] 2단계: llama.cpp 런처 감지/실행 + 서버 탭 + 옵션/자동 설정 (+ GGUF 메타데이터 읽기)
-- [ ] 3단계: 허깅페이스 모델 검색 + 다운로드
+- [x] 3단계: 허깅페이스 모델 검색(카테고리·적합도·추천 파일) + 다운로드(이어받기·검증)
 - [ ] 4단계: 내 모델 + 파일 직접 선택 + 채팅 테스트
 - [ ] 5단계: 다른 런처 어댑터 + 자동 설치
 - [ ] 6단계: 외부 개발 도구 연동
@@ -47,6 +47,10 @@ llamalauncher/
   app/core/server.py         # llama-server 실행/중지/상태 감시 (QProcess)
   app/core/server_log.py     # 로그 분류, 속도 추출, 오류를 쉬운 말로 설명
   app/core/netutil.py        # 포트 확인, 내 IP, API 키 생성
+  app/core/hf_client.py      # 허깅페이스 검색, 카테고리, 파일(양자화) 분석, 추천 파일, 캐시
+  app/core/downloader.py     # 다운로드 관리 (이어받기, 일시정지, SHA-256 검증, 동시 다운로드 제한)
+  app/core/secrets_store.py  # 허깅페이스 토큰을 OS 키체인에 저장
+  app/data/catalog.json      # 카테고리 정의, 검증된 제작자, 숨길 키워드 (앱 업데이트 없이 수정 가능)
   app/ui/                    # PySide6 화면
 tests/                       # Windows/Linux 출력은 가짜 데이터(mock)로 검증
 ```

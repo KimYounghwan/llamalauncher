@@ -34,6 +34,9 @@ class Settings:
     server_options: dict = field(default_factory=dict)  # 마지막으로 쓴 ServerOptions
     server_preset: str = "balanced"
     user_presets: dict[str, dict] = field(default_factory=dict)
+    hf_hide_risky: bool = True
+    hf_trusted_only: bool = False
+    max_downloads: int = 2
 
     MAX_RECENT = 15
 

@@ -7,15 +7,18 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QMainWindow, QMessageBox, QTabWidget
 
+from ..core.hf_client import HFClient, HFModel, QuantFile
+from ..core.recommender import Fit, ModelSpec, assess_fit
+from ..core.hardware import format_bytes
+from ..core.secrets_store import get_hf_token
 from ..core.server import ServerState
 from ..core.settings import Settings
+from .browse_tab import BrowseTab
 from .dashboard import DashboardTab
+from .downloads_tab import DownloadsTab
 from .server_tab import ServerTab
 
-UPCOMING_TABS = [
-    ("🚀 런처", 5), ("🔍 모델 찾기", 3), ("⬇️ 다운로드", 3), ("📁 내 모델", 4),
-    ("💬 채팅 테스트", 4), ("🔌 연동", 6),
-]
+UPCOMING_TABS = [("🚀 런처", 5), ("📁 내 모델", 4), ("💬 채팅 테스트", 4), ("🔌 연동", 6)]
 
 STYLE = """
 QLabel#pageTitle { font-size: 22px; font-weight: 700; }
@@ -56,12 +59,22 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
+        self.hf = HFClient(token=get_hf_token())
         self.dashboard = DashboardTab(Path(settings.models_dir))
+        self.browse = BrowseTab(settings, self.hf, self.save_settings)
+        self.downloads = DownloadsTab(settings, self.save_settings)
         self.server = ServerTab(settings, self.save_settings)
         self.dashboard.system_detected.connect(self.server.set_system)
+        self.dashboard.system_detected.connect(self.browse.set_system)
         self.server.server_state_changed.connect(self._on_server_state)
+        self.browse.download_requested.connect(self._on_download_requested)
+        self.downloads.run_model.connect(self._run_model)
+        self.downloads.active_count_changed.connect(self._on_downloads_count)
+        self.downloads.token_changed.connect(lambda tok: setattr(self.hf, "token", tok))
 
         self.tabs.addTab(self.dashboard, "📊 대시보드")
+        self.tabs.addTab(self.browse, "🔍 모델 찾기")
+        self.downloads_index = self.tabs.addTab(self.downloads, "⬇️ 다운로드")
         self.server_index = self.tabs.addTab(self.server, "▶️ 서버")
         for name, stage in UPCOMING_TABS:
             placeholder = QLabel(f"{name.split(' ', 1)[1]} 기능은 {stage}단계에서 추가될 예정이에요.")
@@ -80,12 +93,39 @@ class MainWindow(QMainWindow):
         mark = {ServerState.RUNNING: " 🟢", ServerState.STARTING: " 🟡", ServerState.ERROR: " 🔴"}.get(state, "")
         self.tabs.setTabText(self.server_index, "▶️ 서버" + mark)
 
+    def _on_download_requested(self, model: HFModel, quant: QuantFile, mmproj) -> None:
+        system = self.dashboard.system
+        if system:
+            fit = assess_fit(system, ModelSpec(file_size=quant.size, n_ctx_train=model.context_length), 4096)
+            if fit.fit == Fit.INSUFFICIENT and QMessageBox.warning(
+                    self, "이 컴퓨터에서는 실행하기 어려워요",
+                    f"{model.name} {quant.quant} ({format_bytes(quant.size)})\n\n{fit.reason}\n\n그래도 받을까요?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+        if model.is_embedding:
+            QMessageBox.information(self, "임베딩 모델", "이 모델은 문서 검색(RAG)용 임베딩 모델이라 대화에는 쓸 수 없어요.")
+        if self.downloads.enqueue(model, quant, mmproj):
+            self.statusBar().showMessage(f"⬇️ {model.name} {quant.quant} 다운로드를 시작했어요. [다운로드] 탭에서 진행 상황을 볼 수 있어요.", 6000)
+
+    def _on_downloads_count(self, n: int) -> None:
+        self.tabs.setTabText(self.downloads_index, "⬇️ 다운로드" + (f" ({n})" if n else ""))
+
+    def _run_model(self, path: str) -> None:
+        self.server.select_model_path(path)
+        self.tabs.setCurrentIndex(self.server_index)
+
     def closeEvent(self, event):
+        busy = []
         if self.server.controller.is_active:
-            answer = QMessageBox.question(self, "종료", "AI 서버가 실행 중이에요. 서버를 끄고 종료할까요?")
+            busy.append("AI 서버가 실행 중이에요 (종료하면 꺼져요).")
+        if self.downloads.has_active():
+            busy.append("다운로드 중인 모델이 있어요 (다음에 이어받을 수 있어요).")
+        if busy:
+            answer = QMessageBox.question(self, "종료", "\n".join(busy) + "\n\n종료할까요?")
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
+        self.downloads.shutdown()
         self.server.shutdown()
         self.save_settings()
         event.accept()

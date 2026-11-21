@@ -57,6 +57,7 @@ TIPS = {
     "repeat": "같은 말을 반복하지 않게 해요. 1.0은 끔, 1.1 정도가 무난해요.",
     "jinja": "모델에 들어 있는 채팅 형식(템플릿)을 그대로 사용해요. 도구 호출(코딩 에이전트 연동)에 필요해요.",
     "extra": "llama-server에 직접 넘길 추가 인자예요. 잘 모르면 비워 두세요. 예: --seed 42",
+    "mmproj": "비전 모델이 이미지를 이해하는 데 필요한 파일(mmproj)이에요. 모델과 같은 폴더에 있으면 자동으로 찾아요.",
 }
 
 
@@ -317,6 +318,14 @@ class ServerTab(QWidget):
         self.jinja = QCheckBox("모델 내장 채팅 템플릿 사용 (--jinja)")
         self.jinja.setToolTip(TIPS["jinja"])
         f.addRow(self.jinja)
+        mm_row = QHBoxLayout()
+        self.mmproj = QLineEdit()
+        self.mmproj.setPlaceholderText("비전 모델이 아니면 비워 두세요")
+        mm_pick = QPushButton("선택…")
+        mm_pick.clicked.connect(self._pick_mmproj)
+        mm_row.addWidget(self.mmproj, 1)
+        mm_row.addWidget(mm_pick)
+        f.addRow(_tip_label("비전 파일 (mmproj)", TIPS["mmproj"]), mm_row)
         self.extra = QLineEdit()
         self.extra.setPlaceholderText("예: --seed 42")
         f.addRow(_tip_label("추가 인자", TIPS["extra"]), self.extra)
@@ -332,7 +341,7 @@ class ServerTab(QWidget):
         self.ctx.currentTextChanged.connect(self._on_option_changed)
         for w in (self.mlock, self.no_mmap, self.jinja):
             w.toggled.connect(self._on_option_changed)
-        for w in (self.api_key, self.alias, self.extra):
+        for w in (self.api_key, self.alias, self.extra, self.mmproj):
             w.textChanged.connect(self._on_option_changed)
         return scroll
 
@@ -445,7 +454,7 @@ class ServerTab(QWidget):
             host=self.host.currentData(), port=self.port.value(), temperature=self.temp.value(),
             top_p=self.top_p.value(), top_k=self.top_k.value(), min_p=self.min_p.value(),
             repeat_penalty=self.repeat.value(), jinja=self.jinja.isChecked(), alias=self.alias.text().strip(),
-            api_key=self.api_key.text().strip(), extra_args=self.extra.text(),
+            api_key=self.api_key.text().strip(), extra_args=self.extra.text(), mmproj=self.mmproj.text().strip(),
         )
 
     def _load_options(self, o: ServerOptions) -> None:
@@ -473,6 +482,7 @@ class ServerTab(QWidget):
             self.repeat.setValue(o.repeat_penalty)
             self.jinja.setChecked(o.jinja)
             self.extra.setText(o.extra_args)
+            self.mmproj.setText(o.mmproj)
         finally:
             self._loading_ui = False
         self._on_option_changed()
@@ -540,6 +550,16 @@ class ServerTab(QWidget):
         if path:
             self._select_model(path)
 
+    def _pick_mmproj(self) -> None:
+        start = str(self.model_info.path.parent) if self.model_info else self.settings.models_dir
+        path, _ = QFileDialog.getOpenFileName(self, "비전 파일(mmproj) 선택", start, "GGUF (*.gguf)")
+        if path:
+            self.mmproj.setText(path)
+
+    def select_model_path(self, path: str) -> None:
+        """다른 탭(다운로드 등)에서 모델을 넘겨받을 때 사용."""
+        self._select_model(path)
+
     def _refresh_model_combo(self) -> None:
         self.model_combo.clear()
         for p in self.settings.recent_models:
@@ -559,6 +579,8 @@ class ServerTab(QWidget):
             QMessageBox.warning(self, "분할 파일 누락", "이 모델은 여러 조각으로 나뉘어 있는데 일부가 없어요:\n" +
                                 "\n".join(p.name for p in info.missing_parts))
         self.model_info = info
+        mm = gguf.find_mmproj(info.path)
+        self.mmproj.setText(str(mm) if mm else "")
         self.settings.add_recent_model(str(info.path))
         self.save_settings()
         self._refresh_model_combo()
@@ -669,7 +691,7 @@ class ServerTab(QWidget):
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
                 return
 
-        self.settings.server_options = {k: v for k, v in o.to_dict().items() if k != "api_key"}
+        self.settings.server_options = {k: v for k, v in o.to_dict().items() if k not in ("api_key", "mmproj")}
         self.save_settings()
         args = build_server_args(o, str(self.model_info.path), caps=st.capabilities)
         self.hint_lbl.hide()

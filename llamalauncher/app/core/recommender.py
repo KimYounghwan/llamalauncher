@@ -149,6 +149,7 @@ class ServerOptions:
     alias: str = ""
     api_key: str = ""
     extra_args: str = ""  # 고급: 직접 추가하는 인자
+    mmproj: str = ""      # 비전 모델의 이미지 인코더 파일 (mmproj-*.gguf)
 
     # 실행 환경(하드웨어/모델)에 따라 정해지는 값 — 사용자 프리셋에는 저장하지 않는다
     HARDWARE_FIELDS = ("ctx_size", "n_gpu_layers", "threads", "batch_size", "ubatch_size",
@@ -244,7 +245,7 @@ def recommend(system: SystemInfo, model: ModelSpec, preset: Preset = Preset.BALA
     return Recommendation(options=opts, fit=assess_fit(system, model, ctx), notes=notes)
 
 
-ALL_CAPS = frozenset({"fa_value", "alias", "api_key", "jinja", "cache_type_v", "min_p", "no_mmap", "mlock"})
+ALL_CAPS = frozenset({"fa_value", "alias", "api_key", "jinja", "cache_type_v", "min_p", "no_mmap", "mlock", "mmproj"})
 
 
 def build_server_args(opts: ServerOptions, model_path: str, alias: Optional[str] = None,
@@ -289,6 +290,8 @@ def build_server_args(opts: ServerOptions, model_path: str, alias: Optional[str]
     name = alias or opts.alias
     if name and "alias" in caps:
         args += ["--alias", name]
+    if opts.mmproj and "mmproj" in caps:
+        args += ["--mmproj", opts.mmproj]
     if opts.api_key and "api_key" in caps:
         args += ["--api-key", opts.api_key]
     if opts.extra_args.strip():
